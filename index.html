@@ -1430,20 +1430,6 @@ hr.home-divider {
   color: var(--secondary);
   box-shadow: inset 0 0 0 1px rgba(51, 62, 78, 0.22);
 }
-.project-header .am-sample-notice {
-  width: fit-content;                 /* block-level, so its top margin merges with the h3's */
-  align-items: center;
-  gap: 0.5rem;
-  margin: -2.25rem 0 2.25rem;         /* 0.75rem under the subtitle; cards keep their place */
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
-  background: #eef2f7;
-  box-shadow: inset 0 0 0 1px rgba(51, 62, 78, 0.18);
-  color: var(--secondary);
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-.am-sample-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); flex: none; }
 
 /* =========================================================
    AM: Leasing row 1 — Entrata Box Score and the right column
@@ -1746,15 +1732,6 @@ hr.home-divider {
 .am-netbar { transition: opacity 0.12s ease; }
 .am-netbar.is-dim { opacity: 0.35; }
 
-/* Sample Data label: on desktop it sits at the right of the location line;
-   narrower screens keep it stacked under the title. */
-@media (min-width: 901px) {
-  .project-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 1.5rem; align-items: center; }
-  .project-header h2 { grid-column: 1 / -1; }
-  .project-header h3 { grid-column: 1; grid-row: 2; }
-  /* the h3 carries a 1em top margin; offset by the same so the pill's center meets the text's */
-  .project-header .am-sample-notice { grid-column: 2; grid-row: 2; align-self: start; justify-self: end; margin: calc(1.6rem + 4.4px) 0 0; }
-}
 </style>
 </head>
 
@@ -1785,10 +1762,7 @@ hr.home-divider {
     <div class="project-header">
       <h2></h2>
       <h3></h3>
-      <div class="am-sample-notice" id="amSampleNotice" style="display:none;" title="Sample data is shown wherever a live connection is pending">
-        <span class="am-sample-dot" aria-hidden="true"></span>
-        Sample Data
-      </div>
+
     </div>
 
     <div class="main-grid">
@@ -6440,8 +6414,6 @@ async function renderProject(key) {
   }
   content.querySelector(".project-header h2").textContent = project.name;
   content.querySelector(".project-header h3").textContent = project.location || "";
-  const sampleNotice = document.getElementById("amSampleNotice");
-  if (sampleNotice) sampleNotice.style.display = AM_SAMPLE_DATA ? "flex" : "none";
 
   COVER_CARD_IDS.forEach(id => setCardVisibility(id, isCover));
   PROJECT_CARD_IDS.forEach(id => setCardVisibility(id, !isCover));

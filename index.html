@@ -1786,8 +1786,8 @@ hr.home-divider {
     </h1>
 
     <div class="dropdown-container">
-      <select id="stateSelector" aria-label="Report"></select>
-      <select id="projectSelector" aria-label="Property"></select>
+      <select id="stateSelector" autocomplete="off" aria-label="Report"></select>
+      <select id="projectSelector" autocomplete="off" aria-label="Property"></select>
     </div>
   </header>
 
@@ -2322,6 +2322,12 @@ const EG_ACCESS_REQUEST_EMAIL = "bshives@thegarrettco.com";
 /* ============================================================
    WORKER + REFRESH SETTINGS
    ============================================================ */
+/* A refresh, on any page, opens the home page at the top: the browser
+   must not restore the old scroll position or a #section from the
+   address bar. (Dropdowns are reset at boot.) */
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+
 /* The Asset Management Dashboard has its own Worker. It must never call
    the EG Executive Dashboard Worker. Paste the AM Worker's URL here once
    it exists (e.g. "https://am-dashboard.<account>.workers.dev").
@@ -6736,6 +6742,13 @@ function egBootDashboard() {
   egHideAuthOverlay();
   if (__egBooted) return;
   __egBooted = true;
+  /* Every load starts on the home page: reset both dropdowns (browsers can
+     restore a previous selection on refresh) and the scroll position. */
+  if (typeof stateSelector !== "undefined" && stateSelector) stateSelector.value = "amdashboard";
+  if (typeof populateProjectDropdown === "function") populateProjectDropdown();
+  selector.value = "tgcportfolio";
+  if (location.hash) { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }
+  window.scrollTo(0, 0);
   showAMDashboard();
   renderProject("tgcportfolio");
   selector.addEventListener("change", e => renderProject(e.target.value));

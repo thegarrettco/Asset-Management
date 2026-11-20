@@ -780,6 +780,10 @@ hr.home-divider {
   .main-grid.is-project #mapCard iframe { width: 100%; height: 100%; }
 
   /* Wrappers disappear on mobile; cards stack via the grid areas above */
+  /* property sections are hidden on the home page (the rule below would
+     otherwise override their display:none) */
+  .main-grid:not(.is-project) .phs-wrapper,
+  .main-grid:not(.is-project) .pu-wrapper { display: none !important; }
   .phs-wrapper,
   .pu-wrapper {
       background: none !important;
@@ -1785,9 +1789,10 @@ hr.home-divider {
   /* on phones the table area itself is capped (not the card), so toolbars
      and footnotes never squeeze the table's window */
   .am-freeze-card { max-height: none !important; overflow: visible !important; }
-  .am-freeze-wrap { overflow: auto !important; flex: none !important; min-height: 0 !important;
-                    max-height: calc(100vh - 74px) !important; max-height: calc(100dvh - 74px) !important;
+  .am-freeze-wrap { overflow-x: auto !important; flex: none !important; min-height: 0 !important;
                     touch-action: auto !important; overscroll-behavior: auto; }
+  .am-runway { min-width: 0; }
+  .am-runway > .am-freeze-card { z-index: 5; }
   /* round the scrolling area itself; a rounded header corner would let rows
      scrolling underneath show through its transparent curve */
   .am-freeze-wrap { border-radius: 12px; }
@@ -2313,7 +2318,6 @@ hr.home-divider {
       </div>
 
     </div>
-    <div class="am-build" id="amBuild">Build 2026-11-20 18:01</div>
   </div><!-- END #projectContent -->
 
 
@@ -5264,6 +5268,88 @@ const AM_PHONE_HEAD = (() => {
   return { refresh: () => { sourceHead = null; schedule(); } };
 })();
 
+/* ============================================================
+   PHONES: desktop-style table lock with native page scrolling.
+   Each long table gets a "runway": a wrapper as tall as the card
+   plus the rows that don't fit. Inside it the card is position:
+   sticky (browser-driven, smooth), so it locks under the section
+   bar — title and header row included — while the page scrolls
+   through the runway; the rows advance by exactly the distance
+   scrolled. At the last row the runway ends, the card releases,
+   and the page continues. Sideways swipes still scroll wide
+   tables. Desktop never uses this.
+   ============================================================ */
+const AM_PHONE_LOCK = (() => {
+  const mq = window.matchMedia("(max-width: 900px)");
+  const GAP = 12;                                       // space under the section bar while locked
+  let raf = null, roTimer = null;
+  const ro = "ResizeObserver" in window ? new ResizeObserver(() => { clearTimeout(roTimer); roTimer = setTimeout(layout, 60); }) : null;
+  const observed = new WeakSet();
+
+  const barH = () => { const b = document.getElementById("amSubnav"); return b && !b.hidden && b.offsetParent !== null ? b.getBoundingClientRect().height : 0; };
+  const lockTop = () => barH() + GAP;
+
+  function unwrap(card) {
+    const run = card.parentElement;
+    if (!run || !run.classList.contains("am-runway")) return;
+    run.parentElement.insertBefore(card, run); run.remove();
+    card.style.position = card.style.top = "";
+    const wrap = card.querySelector(".am-freeze-wrap");
+    if (wrap) { wrap.style.maxHeight = wrap.style.overflowY = ""; }
+  }
+
+  function layout() {
+    const cards = [...document.querySelectorAll(".am-freeze-card")];
+    if (!mq.matches) { cards.forEach(unwrap); return; }
+    const top = lockTop(), vh = window.innerHeight;
+    cards.forEach(card => {
+      const wrap = card.querySelector(".am-freeze-wrap"); if (!wrap) return;
+      const table = wrap.querySelector("table");
+      if (ro && table && !observed.has(table)) { ro.observe(table); observed.add(table); }
+      let run = card.parentElement.classList.contains("am-runway") ? card.parentElement : null;
+      const hidden = getComputedStyle(card).display === "none";
+      if (!run) {
+        if (hidden) return;
+        run = document.createElement("div");
+        run.className = "am-runway";
+        const cs = getComputedStyle(card);
+        ["gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd"].forEach(p => { run.style[p] = cs[p]; });
+        card.parentElement.insertBefore(run, card); run.appendChild(card);
+      }
+      run.style.display = hidden ? "none" : "";
+      if (hidden) return;
+      /* size the table window so the whole card fits on screen while locked */
+      wrap.style.overflowY = "hidden";
+      wrap.style.maxHeight = "none";
+      const nonTable = card.offsetHeight - wrap.offsetHeight;
+      const windowH = Math.max(220, Math.floor(vh - top - nonTable - GAP));
+      wrap.style.maxHeight = `${windowH}px`;
+      const extra = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+      card.style.position = extra ? "sticky" : "";
+      card.style.top = extra ? `${top}px` : "";
+      run.style.height = extra ? `${card.offsetHeight + extra}px` : "";
+      run.dataset.extra = extra;
+    });
+    sync();
+  }
+
+  function sync() {
+    raf = null;
+    if (!mq.matches) return;
+    const top = lockTop();
+    document.querySelectorAll(".am-runway").forEach(run => {
+      const extra = +run.dataset.extra || 0; if (!extra || run.style.display === "none") return;
+      const wrap = run.querySelector(".am-freeze-wrap"); if (!wrap) return;
+      const p = Math.max(0, Math.min(extra, top - run.getBoundingClientRect().top));
+      if (Math.abs(wrap.scrollTop - p) > 0.5) wrap.scrollTop = p;
+    });
+  }
+  window.addEventListener("scroll", () => { if (!raf) raf = requestAnimationFrame(sync); }, { passive: true });
+  window.addEventListener("resize", () => { clearTimeout(roTimer); roTimer = setTimeout(layout, 80); });
+  if (mq.addEventListener) mq.addEventListener("change", layout); else mq.addListener(layout);
+  return { refresh: () => { clearTimeout(roTimer); roTimer = setTimeout(layout, 30); } };
+})();
+
 const stateSelector = document.getElementById("stateSelector");
 const selector      = document.getElementById("projectSelector");
 const content       = document.getElementById("projectContent");
@@ -6736,6 +6822,7 @@ async function renderProject(key) {
   if (typeof AM_SUBNAV !== "undefined") AM_SUBNAV.build(isCover ? "cover" : "property", isCover ? "Portfolio" : project.name);
   if (isCover) {
     await renderCover();
+    if (typeof AM_PHONE_LOCK !== "undefined") AM_PHONE_LOCK.refresh();
     return;
   }
 
@@ -6896,6 +6983,7 @@ async function renderProject(key) {
   updateExcelScrollbarPadding(content);
   attachExcelWrapObservers(content);
   hideProjectLoadingOverlay();
+  if (typeof AM_PHONE_LOCK !== "undefined") AM_PHONE_LOCK.refresh();
 }
 
 function goToFullPortfolio(scrollToTop = true) {

@@ -1768,6 +1768,9 @@ hr.home-divider {
 .am-tierchip:focus:not(:focus-visible), .am-tierall:focus:not(:focus-visible) { outline: none; }
 .am-tierchip:focus-visible, .am-tierall:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .am-legend-static { margin-left: 0.35rem; }
+/* The ladder's chips follow the card header directly: the standard header
+   gap above (the header supplies it), and clear space before the chart */
+.am-legend.am-ladder-legend { margin: 0 0 0.75rem; }
 </style>
 </head>
 
@@ -4227,7 +4230,7 @@ const AM_CHARTS = (() => {
       }).join("")
       + (filtered ? `<button type="button" class="am-tierall" data-tier="__all">Show all</button>` : "")
       + `<span class="am-legend-item am-legend-static"><span class="am-dot am-dot-hollow"></span>New rate</span>`;
-    return `<div class="am-legend">${legend}</div><svg class="am-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rent by unit size">${g}</svg>`;
+    return `<div class="am-legend am-ladder-legend">${legend}</div><svg class="am-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rent by unit size">${g}</svg>`;
   }
 
   function spark(values, w = 120, h = 28) {

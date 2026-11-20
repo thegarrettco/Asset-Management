@@ -7801,5 +7801,1158 @@ egInitAuth();
 })();
 </script>
 
+<!-- ===== LEAD SUMMARY PAGE: paste this whole block just before </body> ===== -->
+<style>
+/* Lead Summary page. Cards, tables, tiles, chips, filters, charts, the
+   section bar and the frozen-table scrolling are the dashboard's own;
+   only the page padding and the chart motion below are added. */
+#leadSummaryContent { padding: 2rem 5%; animation: fadeIn 0.6s ease-in-out; }
+#leadSummaryContent .am-pw-decide { display: inline-flex; }
+#leadSummaryContent .am-chart { overflow: visible; }
+#leadSummaryContent .ls-n { font: inherit; color: inherit; letter-spacing: inherit; }
+
+/* Charts: hover focus (same dimming as the This Week net-application bars) */
+#leadSummaryContent .ls-row { transition: opacity 0.12s ease; }
+#leadSummaryContent .ls-hovering .ls-row:not(.is-hot) { opacity: 0.35; }
+#leadSummaryContent .ls-click .ls-row { cursor: pointer; }
+#leadSummaryContent .ls-readout { min-height: 1.25rem; margin-top: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--am-muted, #6b7685); font-variant-numeric: tabular-nums; }
+#leadSummaryContent .ls-readout.is-on { color: var(--primary, #0070b9); }
+#leadSummaryContent .am-book .am-chart-bar { margin-top: 0; }
+
+/* Charts: entrance motion, played when the numbers change */
+@keyframes lsGrowY { from { transform: scaleY(0); } }
+@keyframes lsGrowX { from { transform: scaleX(0); } }
+@keyframes lsDraw  { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes lsFade  { from { opacity: 0; } }
+#leadSummaryContent .ls-anim .ls-gy { transform-box: fill-box; transform-origin: 50% 100%; animation: lsGrowY 0.65s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: var(--d, 0s); }
+#leadSummaryContent .ls-anim .ls-gx { transform-box: fill-box; transform-origin: 0 50%; animation: lsGrowX 0.65s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: var(--d, 0s); }
+#leadSummaryContent .ls-anim .ls-draw { stroke-dasharray: 1; animation: lsDraw 0.9s cubic-bezier(0.3, 0.6, 0.2, 1) both; animation-delay: var(--d, 0s); }
+#leadSummaryContent .ls-anim .ls-fade { animation: lsFade 0.35s ease-out both; animation-delay: var(--d, 0.5s); }
+
+/* Lead Conversion on wide screens: chart on the left, the eight cards as a
+   2x4 panel on the right, the chart sized to end level with them (This Week layout) */
+@media (min-width: 1280px) {
+  #lsWeekBody {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 28%, 440px);
+    grid-template-areas: "head head" "bar side" "chart side";
+    grid-template-rows: auto auto 1fr;
+    column-gap: 1.75rem;
+  }
+  #lsWeekBody > .am-status-head { grid-area: head; }
+  #lsWeekBody > .am-chart-bar   { grid-area: bar; margin: 0 0 0.5rem; }
+  #lsWeekBody > .am-chart-wrap  { grid-area: chart; align-self: end; }
+  #lsWeekBody > .ls-side        { grid-area: side; align-self: start; }
+  #lsWeekBody > .ls-side .am-strip,
+  #lsWeekBody > .ls-side .am-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #lsWeekBody > .ls-side .am-strip { margin-bottom: 0.75rem; }
+}
+
+@media (max-width: 900px) { #leadSummaryContent { font-size: 0.85rem; } }
+@media (prefers-reduced-motion: reduce) {
+  #leadSummaryContent { animation: none; }
+  #leadSummaryContent .ls-anim * { animation: none !important; }
+}
+</style>
+<script>
+/* ============================================================
+   LEAD SUMMARY PAGE (AM)
+   A third page on the left dropdown, built like the Asset
+   Directory: same page header, same cards, tables, tiles, chips,
+   filters, charts and section bar as the cover. The right
+   dropdown narrows the page to one community.
+
+   Reports: Lead Conversion · Communities · Lead to Tour & Lead to
+   Lease by Community · Agent Scorecard · Leasing Staff · Lead
+   Sources · Lead Sources Detail.
+
+   Data contract (Entrata Lead Source Attribution + Lead Conversion),
+   one row per community x week x source x handler:
+     { property, weekEnding:"YYYY-MM-DD", source, sourceGroup,
+       handlerType:"staff"|"ai"|"house"|"none", person, role,
+       leads, tours, apps, leases }
+   Payload: { updatedAt, weekEnding, rows:[...] }
+   Until AM_LEAD_SUMMARY_ENDPOINT returns it through the AM Worker,
+   the page shows sample numbers labeled "Sample Data".
+   ============================================================ */
+const AM_LEAD_SUMMARY_ENDPOINT = null;   // e.g. "/am-lead-summary"
+
+/* Report names that differ from the dashboard's property names */
+const LS_ALIASES = {
+  "jasper at victory ridge": "jasperi", "jasper at victory ridge i": "jasperi", "jasper at victory ridge ii": "jasperii",
+  "garrett turkey creek": "knoxville", "garrett harvest junction west": "garrettharvestjunctionwest",
+  "lift at jordan creek": "liftatjordancreek", "the citizen on constitution": "citizenonconstitution",
+  "stone mesa flats": "stonemesa", "ara townhomes & flats": "ara", "ebbtide villas and flats": "ebbtidevillasandflats",
+  "the lennox at copperleaf": "lennoxatcopperleaf", "maeva modern apartments": "maevamodernapartments",
+  "the artifact townhomes": "theartifact"
+};
+
+const AM_LEADS = (() => {
+  const WEEKS = 13;
+  const PERIODS = [[1, "Last week"], [4, "4 weeks"], [13, "13 weeks"]];
+  const BENCH = { lt: 0.20, ta: 0.40, al: 0.75, ll: 0.09 };          // lead→tour, tour→app, app→lease, lead→lease goal
+  const MIN = { leads: 15, tours: 5, apps: 5, agentLeads: 10 };
+  const PREF_KEY = "am_lead_summary_prefs_v1";
+  const SECTIONS = [["Conversion", "lsConversionCard"], ["Communities", "lsCommunitiesCard"], ["By Community", "lsByCommunityCard"],
+                    ["Agents", "lsAgentsCard"], ["Leasing Staff", "lsStaffCard"], ["Sources", "lsSourcesCard"],
+                    ["Source Charts", "lsSourceChartsCard"], ["Source Detail", "lsSourceDetailCard"]];
+  /* Cards whose tables freeze and scroll like the cover and Asset Directory tables */
+  const FREEZE = ["lsCommunitiesCard", "lsAgentsCard", "lsStaffCard", "lsSourcesCard", "lsSourceDetailCard"];
+  const STAGE = { lt: { label: "Lead to Tour", color: "#0070b9" }, ta: { label: "Tour to Application", color: "#16a085" },
+                  al: { label: "Application to Lease", color: "#8e44ad" }, ll: { label: "Lead to Lease", color: "#333e4e" } };
+  const C = (typeof AM_CHARTS !== "undefined" && AM_CHARTS.C) ||
+            { leased: "#0070b9", occ: "#333e4e", net: "#9fb6cc", grid: "rgba(51,62,78,0.10)", text: "#6b7685", budget: "#2e7d32", exp: "#c0392b" };
+
+  const GROUPS = ["ILS - ApartmentList", "ILS - Apartments.com", "ILS - Zillow", "ILS - Other", "Website & Paid Digital",
+                  "Social Media", "Signage & Walk-in", "Resident Referral", "AI / Self-Guided", "Other / Unknown"];
+  /* name, default group, share of leads, P(tour|lead), P(app|tour), P(lease|app). Sample only. */
+  const SOURCE_DEFAULTS = [
+    ["ApartmentList.com", "ILS - ApartmentList", 39, .03, .40, .67], ["Website", "Website & Paid Digital", 17, .16, .60, .55],
+    ["Zillow", "ILS - Zillow", 9.4, .18, .33, .57], ["Unknown", "Other / Unknown", 8, .05, .20, .90],
+    ["Apartments.com", "ILS - Apartments.com", 5.4, .23, .60, .60], ["Google My Business", "Website & Paid Digital", 4.8, .24, .30, .60],
+    ["General (Signs, Business Cards, Email Signature)", "Signage & Walk-in", 3.8, .46, .27, .60], ["Google Ads", "Website & Paid Digital", 3.4, .20, .35, .30],
+    ["Meta Ads", "Social Media", 2.4, .02, .30, .50], ["Signage", "Signage & Walk-in", 2.5, .85, .16, .70],
+    ["Referral - Other", "Resident Referral", 1.6, .54, .60, .75], ["Aigentless", "AI / Self-Guided", .7, .06, .90, .80],
+    ["Drive By", "Signage & Walk-in", .7, .88, .20, .70], ["Resident Referral", "Resident Referral", .35, .55, .40, .80],
+    ["Google Search", "Website & Paid Digital", .15, .25, .50, .50], ["Property Website", "Website & Paid Digital", .15, .20, .50, .50],
+    ["Not Provided", "Other / Unknown", .12, .30, .60, .90], ["Website Popup", "Website & Paid Digital", .1, .10, .50, .50],
+    ["Realtor.com", "ILS - Other", .08, .10, .50, .50], ["Rent.com", "ILS - Other", .08, .10, .50, .50]
+  ].map(([name, group, share, tour, app, lease]) => ({ name, group, share, tour, app, lease }));
+  const WHO = [["staff", "Leasing Staff (People)"], ["ai", "AI Leasing Assistants"], ["house", "House / Shared Accounts"], ["none", "Not Assigned"]];
+  const HANDLER_NAMES = { ai: "AI leasing assistant", house: "House account", none: "Unassigned" };
+
+  /* ---------- formatting (same output as the dashboard's AMT helpers) ---------- */
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const div = (a, b) => (b > 0 ? a / b : null);
+  const pct1 = f => (f === null || f === undefined || !isFinite(f)) ? "—" : `${(f * 100).toFixed(1)}%`;
+  const pct0 = f => `${Math.round(f * 100)}%`;
+  const pts = d => (d === null || d === undefined || !isFinite(d)) ? "—"
+    : (Math.abs(d * 100) < 0.05 ? "0.0 pts" : d < 0 ? `(${Math.abs(d * 100).toFixed(1)} pts)` : `+${(d * 100).toFixed(1)} pts`);
+  const int0 = n => (n === null || n === undefined || !isFinite(n)) ? "—" : Math.round(n).toLocaleString("en-US");
+  const md = d => `${d.getMonth() + 1}/${d.getDate()}`;
+  const mdy = d => `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  const badge = (id, text, sample) => {
+    const el = $(id); if (!el) return;
+    if (typeof setBadge === "function") setBadge(el, text); else { el.textContent = text; el.style.display = text ? "inline-block" : "none"; }
+    el.classList.toggle("is-sample", !!sample);
+  };
+  const SAMPLE_BADGE = typeof AM_SAMPLE_BADGE !== "undefined" ? AM_SAMPLE_BADGE : "Sample Data";
+
+  /* ---------- communities, from the dashboard's own registry and tracker ---------- */
+  const tracker = k => (typeof AMT !== "undefined" && AMT.get) ? AMT.get(k) : null;
+  const commKeys = () => Object.keys(projects).filter(k => k !== "tgcportfolio");
+  function info(k) {
+    const p = projects[k] || {}, T = tracker(k) || {};
+    return { name: p.name || T.name || k, rm: T.rmFull || p.rm || T.rm || "—", market: p.market || "—",
+             mgmt: T.mgmt || p.mgmt || "Garrett Residential", occ: T.occ ?? null, units: p.units || T.units || 0,
+             book: T.book || null, pre: T.status === "pre" || T.occ === 0 };
+  }
+  function keyFor(name) {
+    if (typeof resolvePropertyKey === "function") { const k = resolvePropertyKey(name); if (k) return k; }
+    const n = String(name || "").trim().toLowerCase();
+    return LS_ALIASES[n] && projects[LS_ALIASES[n]] ? LS_ALIASES[n] : (projects[name] ? name : null);
+  }
+
+  /* ---------- preferences kept in this browser ---------- */
+  const freshPrefs = () => ({ weeks: 4, srcOff: {}, grpOff: {}, regroup: {} });
+  let prefs = (() => { try { return Object.assign(freshPrefs(), JSON.parse(localStorage.getItem(PREF_KEY) || "{}")); } catch (e) { return freshPrefs(); } })();
+  if (!PERIODS.some(([w]) => w === prefs.weeks)) prefs.weeks = 4;
+  const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) {} };
+
+  /* ---------- data ---------- */
+  const metaAsOf = (typeof AMT !== "undefined" && AMT.META && AMT.META.asOf) || new Date().toISOString().slice(0, 10);
+  let asOf = new Date(metaAsOf + "T00:00:00"), weekEnds = [];
+  const setWeeks = () => { weekEnds = Array.from({ length: WEEKS }, (_, i) => new Date(asOf.getTime() - (WEEKS - 1 - i) * 7 * 864e5)); };
+  setWeeks();
+  let sources = SOURCE_DEFAULTS.map(s => Object.assign({}, s));
+  let facts = [], handlers = {}, isLive = false, updatedAt = null, loaded = false;
+  const groupOf = s => prefs.regroup[s.name] || s.group;
+  const srcOn = s => !prefs.srcOff[s.name] && !prefs.grpOff[groupOf(s)];
+  const allGroups = () => [...new Set(GROUPS.concat(sources.map(groupOf)))];
+
+  function rngFor(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    let a = h >>> 0;
+    return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
+  /* Sample: simulates individual leads, so every report adds up to every other one */
+  function buildSample() {
+    facts = []; handlers = {};
+    const FIRST = ["Joanna","Abigail","Paola","Sofia","Ivory","Selena","Andreliz","DeJa","Nathaly","Drew","Ashley","Isabelle","Bishop","Ruby",
+                   "Makayla","Jackie","Rudy","Ivy","Molly","Kaysi","Lea","Marcus","Tessa","Jordan","Nina","Elena","Cody","Brianna"];
+    const LAST = ["Ortiz","Johnson","Sanchez","Leon","Brooks","Valdez","Davenport","Murillo","Gavin","Gaffney","Marcum","Banda","Portillo","Keene",
+                  "Pelletier","Diaz","Wright","Morello","Gibbs","Lite","Hale","Moreno","Fischer","Lund","Ramos","Pierce","Shaw","Tran"];
+    const ROLES = ["Leasing Agent", "Leasing Agent", "Leasing Consultant", "Assistant Community Manager"];
+    const used = new Set(), shareSum = sources.reduce((a, s) => a + (s.share || 0), 0);
+    commKeys().forEach(k => {
+      const r = rngFor(`am-leads:${k}`), b = (lo, hi) => lo + r() * (hi - lo), pick = arr => arr[Math.floor(r() * arr.length)];
+      const I = info(k), units = Math.max(60, I.units || 200);
+      const base = units * 0.095 * (I.book === "lu" ? 1.3 : 1) * (I.pre ? 0.25 : 1) * b(0.6, 1.4);
+      const fT = b(0.4, 2.0), fA = b(0.6, 1.4), fL = b(0.75, 1.2);
+      const agents = [], n = 1 + (units > 220 ? 1 : 0) + (r() < 0.45 ? 1 : 0);
+      for (let i = 0; i < n; i++) {
+        let name, guard = 0;
+        do { name = `${pick(LAST)}, ${pick(FIRST)}`; } while (used.has(name) && ++guard < 60);
+        used.add(name);
+        const id = `${k}:a${i}`;
+        handlers[id] = { id, k, type: "staff", name, role: i === 0 ? "Leasing Agent" : pick(ROLES) };
+        agents.push({ id, wT: b(0.6, 1.6), wN: r() < 0.15 ? b(2.5, 5) : b(0.4, 1.6) });
+      }
+      ["ai", "house", "none"].forEach(t => { handlers[`${k}:${t}`] = { id: `${k}:${t}`, k, type: t, name: HANDLER_NAMES[t], role: "" }; });
+      const acc = new Map();
+      for (let w = 0; w < WEEKS; w++) {
+        const leads = Math.max(0, Math.round(base * b(0.75, 1.25)));
+        for (let i = 0; i < leads; i++) {
+          let u = r() * shareSum, s = 0;
+          while (s < sources.length - 1 && (u -= sources[s].share) > 0) s++;
+          const src = sources[s];
+          const t = r() < Math.min(.95, src.tour * fT) ? 1 : 0;
+          const a = t && r() < Math.min(.95, src.app * fA) ? 1 : 0;
+          const x = a && r() < Math.min(.98, src.lease * fL) ? 1 : 0;
+          const q = r();
+          const type = t ? (q < .82 ? "staff" : q < .88 ? "ai" : "house") : (q < .17 ? "staff" : q < .75 ? "ai" : q < .99 ? "house" : "none");
+          let h = `${k}:${type}`;
+          if (type === "staff") {
+            const ws = agents.map(g => (t ? g.wT : g.wN));
+            let v = r() * ws.reduce((m, c) => m + c, 0), j = 0;
+            while (j < agents.length - 1 && (v -= ws[j]) > 0) j++;
+            h = agents[j].id;
+          }
+          const key = `${w}|${s}|${h}`;
+          let o = acc.get(key);
+          if (!o) { o = { k, w, s, h, l: 0, t: 0, a: 0, x: 0 }; acc.set(key, o); }
+          o.l++; o.t += t; o.a += a; o.x += x;
+        }
+      }
+      facts.push(...acc.values());
+    });
+  }
+
+  async function loadLive() {
+    if (!AM_LEAD_SUMMARY_ENDPOINT || typeof amLoad !== "function") return false;
+    if (typeof amWorkerReady === "function" && !amWorkerReady()) return false;
+    const json = await amLoad(AM_LEAD_SUMMARY_ENDPOINT);
+    if (!json || !Array.isArray(json.rows) || !json.rows.length) return false;
+    if (json.weekEnding) { asOf = new Date(String(json.weekEnding).slice(0, 10) + "T00:00:00"); setWeeks(); }
+    const idx = new Map(sources.map((s, i) => [s.name, i])), acc = new Map(), hs = {}, unmatched = new Set();
+    json.rows.forEach(row => {
+      const k = keyFor(row.property); if (!k) { unmatched.add(row.property); return; }
+      const w = WEEKS - 1 - Math.round((asOf - new Date(String(row.weekEnding).slice(0, 10) + "T00:00:00")) / (7 * 864e5));
+      if (!(w >= 0 && w < WEEKS)) return;
+      let s = idx.get(row.source);
+      if (s === undefined) { s = sources.length; sources.push({ name: row.source, group: row.sourceGroup || "Other / Unknown" }); idx.set(row.source, s); }
+      const type = ["staff", "ai", "house", "none"].includes(row.handlerType) ? row.handlerType : "none";
+      const h = type === "staff" ? `${k}:p:${row.person}` : `${k}:${type}`;
+      if (!hs[h]) hs[h] = { id: h, k, type, name: type === "staff" ? row.person : HANDLER_NAMES[type], role: row.role || (type === "staff" ? "Leasing Agent" : "") };
+      const key = `${k}|${w}|${s}|${h}`;
+      let o = acc.get(key);
+      if (!o) { o = { k, w, s, h, l: 0, t: 0, a: 0, x: 0 }; acc.set(key, o); }
+      o.l += +row.leads || 0; o.t += +row.tours || 0; o.a += +row.apps || 0; o.x += +row.leases || 0;
+    });
+    if (unmatched.size) console.warn("[Lead Summary] Add these names to LS_ALIASES:", [...unmatched]);
+    if (!acc.size) return false;
+    facts = [...acc.values()]; handlers = hs; isLive = true; updatedAt = json.updatedAt || null;
+    return true;
+  }
+
+  /* ---------- filters (same chip filters as the cover) ---------- */
+  const F = { rm: "all", mgmt: "all" };
+  let comm = "all";
+  function scopeKeys() {
+    return commKeys().filter(k => {
+      const I = info(k);
+      return (comm === "all" || k === comm) && (F.rm === "all" || I.rm === F.rm) && (F.mgmt === "all" || I.mgmt === F.mgmt);
+    });
+  }
+  let inScope = new Set();
+  const inPeriod = r => r.w >= WEEKS - prefs.weeks;
+  const included = r => srcOn(sources[r.s]);
+  const zero = () => ({ l: 0, t: 0, a: 0, x: 0 });
+  function total(pred) { const o = zero(); for (const r of facts) if (pred(r)) { o.l += r.l; o.t += r.t; o.a += r.a; o.x += r.x; } return o; }
+  function totalsBy(pred, keyFn) {
+    const m = new Map();
+    for (const r of facts) {
+      if (!pred(r)) continue;
+      const key = keyFn(r);
+      let o = m.get(key); if (!o) { o = zero(); m.set(key, o); }
+      o.l += r.l; o.t += r.t; o.a += r.a; o.x += r.x;
+    }
+    return m;
+  }
+  const rates = o => ({ lt: div(o.t, o.l), ta: div(o.a, o.t), al: div(o.x, o.a), ll: div(o.x, o.l) });
+  const lowOf = o => ({ lt: o.l < MIN.leads, ta: o.t < MIN.tours, al: o.a < MIN.apps, ll: o.l < MIN.leads });
+  const periodText = () => prefs.weeks === 1 ? "last week" : `last ${prefs.weeks} weeks`;
+  const scope = r => inScope.has(r.k) && inPeriod(r) && included(r);
+
+  /* A rate cell in the dashboard's colors: green at or above benchmark, red below */
+  function rateCell(v, bench, low) {
+    if (low || v === null) return `<td class="excel-number excel-muted">${low ? "Low volume" : "—"}</td>`;
+    const cls = v >= bench ? "is-positive" : v < bench * 0.9 ? "is-negative" : "";
+    return `<td class="excel-number ${cls}" title="${pct1(v)} against ${pct0(bench)}">${pct1(v)}</td>`;
+  }
+  const numCell = v => `<td class="excel-number">${int0(v)}</td>`;
+  const link = k => `<a href="#" class="excel-link" data-project="${esc(k)}">${esc(info(k).name)}</a>`;
+  const REDUCED = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  /* Numbers count up when the view changes; hovering a week cancels it */
+  const FMT = { int: int0, pct: pct1 };
+  function countUp(scopeEl) {
+    if (!scopeEl) return;
+    const tok = scopeEl._lsTok = (scopeEl._lsTok || 0) + 1, els = [...scopeEl.querySelectorAll("[data-count]")];
+    if (!els.length || REDUCED()) return;
+    const t0 = performance.now();
+    const frame = now => {
+      if (tok !== scopeEl._lsTok) return;
+      const p = Math.min(1, (now - t0) / 650), e = 1 - Math.pow(1 - p, 3);
+      els.forEach(el => { el.textContent = FMT[el.dataset.fmt](+el.dataset.count * e); });
+      if (p < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+  const stopCount = scopeEl => { if (scopeEl) scopeEl._lsTok = (scopeEl._lsTok || 0) + 1; };
+  const legendLine = (label, color, dot) => `<span class="am-legend-item"><span class="am-line${dot ? " am-line-dot" : ""}" style="${dot ? `color:${color}` : `background:${color}`}"></span>${esc(label)}</span>`;
+  const legendSq = (label, color) => `<span class="am-legend-item"><span class="am-dot am-dot-sq" style="background:${color}"></span>${esc(label)}</span>`;
+
+  /* ---------- charts: drawn at the card's real width, like This Week ---------- */
+  const W = el => Math.max(300, Math.round((el && el.clientWidth) || 560));
+  const txt = (x, y, s, anchor = "middle", extra = "") => `<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="11" fill="${C.text}" ${extra}>${esc(s)}</text>`;
+  const svgOpen = (w, h, label, cls = "") => `<svg class="am-chart am-chart-live ${cls}" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" tabindex="0" role="img" aria-label="${esc(label)}">`;
+
+  /* Hover / tap / arrow keys on rows (.ls-row[data-i]); the rest of the chart dims */
+  function wireRows(svg, count, onHot, opts = {}) {
+    let cur = -1;
+    const rows = [...svg.querySelectorAll(".ls-row")];
+    const set = i => {
+      cur = i;
+      svg.classList.toggle("ls-hovering", i >= 0);
+      rows.forEach(r => r.classList.toggle("is-hot", +r.dataset.i === i));
+      onHot(i);
+    };
+    const pick = e => { const r = e.target.closest(".ls-row"); set(r ? +r.dataset.i : -1); };
+    svg.addEventListener("pointermove", pick);
+    svg.addEventListener("pointerdown", pick);
+    svg.addEventListener("pointerleave", () => set(-1));
+    svg.addEventListener("focus", () => { if (cur < 0 && svg.matches(":focus-visible")) set(0); });
+    svg.addEventListener("blur", () => set(-1));
+    svg.addEventListener("keydown", e => {
+      const back = opts.horizontal ? "ArrowLeft" : "ArrowUp", fwd = opts.horizontal ? "ArrowRight" : "ArrowDown";
+      if (e.key === back || e.key === fwd) { e.preventDefault(); set(Math.max(0, Math.min(count - 1, (cur < 0 ? 0 : cur) + (e.key === back ? -1 : 1)))); }
+      if (e.key === "Escape") set(-1);
+      if (e.key === "Enter" && cur >= 0 && opts.onPick) opts.onPick(cur);
+    });
+    if (opts.onPick) svg.addEventListener("click", e => { const r = e.target.closest(".ls-row"); if (r) opts.onPick(+r.dataset.i); });
+  }
+
+  /* Actual vs benchmark at each stage */
+  function chartStages(el, r, animate) {
+    const w = W(el), H = 250, L = 40, Rt = 10, Tp = 20, B = 34;
+    const keys = ["lt", "ta", "al", "ll"];
+    const max = Math.max(1, ...keys.map(k => r[k] || 0));
+    const y = v => Tp + (H - Tp - B) * (1 - v / max), gw = (w - L - Rt) / 4, bw = Math.min(30, gw * 0.28);
+    let g = "";
+    for (let v = 0; v <= max + 1e-9; v += 0.25) g += `<line x1="${L}" x2="${w - Rt}" y1="${y(v)}" y2="${y(v)}" stroke="${C.grid}"/>` + txt(L - 8, y(v) + 4, pct0(v), "end");
+    keys.forEach((k, i) => {
+      const cx = L + gw * i + gw / 2, v = r[k] || 0, b = BENCH[k], lab = STAGE[k].label.replace("Application", "App");
+      g += `<g class="ls-row" data-i="${i}"><rect x="${cx - gw / 2}" y="${Tp - 6}" width="${gw}" height="${H - Tp - B + 6}" fill="transparent"/>`;
+      g += `<rect class="ls-gy" style="--d:${i * 0.07}s" x="${cx - bw - 2}" y="${y(v)}" width="${bw}" height="${y(0) - y(v)}" rx="1.5" fill="${C.leased}"/>`;
+      g += `<rect class="ls-gy" style="--d:${i * 0.07 + 0.04}s" x="${cx + 2}" y="${y(b)}" width="${bw}" height="${y(0) - y(b)}" rx="1.5" fill="${C.net}"/>`;
+      g += `<text class="ls-fade" style="--d:${0.45 + i * 0.07}s" x="${cx - bw / 2 - 2}" y="${y(v) - 5}" text-anchor="middle" font-size="11" font-weight="600" fill="${C.occ}">${pct1(r[k])}</text>`;
+      if (gw < 110) { const [p1, p2] = lab.split(" to "); g += `<text x="${cx}" y="${H - B + 14}" text-anchor="middle" font-size="11" fill="${C.text}"><tspan x="${cx}">${p1} to</tspan><tspan x="${cx}" dy="12">${p2}</tspan></text>`; }
+      else g += txt(cx, H - B + 18, lab);
+      g += `</g>`;
+    });
+    el.innerHTML = svgOpen(w, H, "Conversion against benchmark at each stage. Hover a stage, or use the arrow keys.", animate ? "ls-anim" : "") + g + `</svg>`;
+    return el.querySelector("svg");
+  }
+
+  /* Weekly trend: one line per stage that is switched on, weekly leads as bars below */
+  function chartTrend(el, weeks, on, animate, height) {
+    const w = W(el), n = weeks.length, L = 44, Rt = 20, Tp = 14;
+    const chartH = height ? Math.max(160, Math.round(height - 92)) : Math.round(Math.min(230, Math.max(170, w * 0.2))), barTop = Tp + chartH + 26, barH = 48, H = barTop + barH + 4;
+    const shown = Object.keys(STAGE).filter(k => on[k]);
+    const vals = shown.flatMap(k => weeks.map(p => p.r[k]).filter(v => v !== null).concat([BENCH[k]]));
+    const max = Math.min(1, Math.max(0.1, Math.ceil(Math.max(...vals) * 10) / 10 + 0.05));
+    const x = i => L + (n > 1 ? (w - L - Rt) * i / (n - 1) : (w - L - Rt) / 2), y = v => Tp + chartH * (1 - Math.min(1, v) / max);
+    const step = max > 0.5 ? 0.2 : max > 0.25 ? 0.1 : 0.05;
+    let g = "";
+    for (let v = 0; v <= max + 1e-9; v += step) g += `<line x1="${L}" x2="${w - Rt}" y1="${y(v)}" y2="${y(v)}" stroke="${C.grid}"/>` + txt(L - 8, y(v) + 4, pct0(v), "end");
+    const every = w < 460 && n > 8 ? 2 : 1;
+    weeks.forEach((p, i) => { if (i % every === 0 || i === n - 1) g += txt(x(i), Tp + chartH + 16, md(p.d)); });
+    shown.forEach(k => {
+      g += `<line x1="${L}" x2="${w - Rt}" y1="${y(BENCH[k])}" y2="${y(BENCH[k])}" stroke="${STAGE[k].color}" stroke-width="1.5" stroke-dasharray="2 4"/>`;
+      g += `<text class="ls-fade" x="${w - Rt}" y="${y(BENCH[k]) - 5}" text-anchor="end" font-size="11" fill="${STAGE[k].color}">${k === "ll" ? "Goal" : "Benchmark"} ${pct0(BENCH[k])}</text>`;
+    });
+    shown.forEach((k, j) => {
+      const segs = []; let cur = [];
+      weeks.forEach((p, i) => { const v = p.r[k]; if (v === null) { if (cur.length) segs.push(cur); cur = []; } else cur.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); });
+      if (cur.length) segs.push(cur);
+      segs.forEach(sg => { g += `<polyline class="ls-draw" style="--d:${j * 0.08}s" pathLength="1" points="${sg.join(" ")}" fill="none" stroke="${STAGE[k].color}" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>`; });
+    });
+    const maxL = Math.max(1, ...weeks.map(p => p.o.l)), bw = Math.max(3, Math.min(18, (w - L - Rt) / n - 6));
+    g += `<line x1="${L}" x2="${w - Rt}" y1="${barTop + barH}" y2="${barTop + barH}" stroke="${C.grid}"/>` + txt(L - 8, barTop + barH - 2, "Leads", "end");
+    weeks.forEach((p, i) => {
+      const h = (p.o.l / maxL) * barH;
+      g += `<rect class="ls-gy am-netbar" data-i="${i}" style="--d:${0.2 + i * 0.03}s" x="${(x(i) - bw / 2).toFixed(1)}" y="${(barTop + barH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${C.net}"/>`;
+    });
+    g += `<g class="am-hover" style="display:none"><line class="am-guide" x1="0" x2="0" y1="${Tp}" y2="${barTop + barH}" stroke="${C.occ}" stroke-opacity="0.35" stroke-width="1"/>`
+       + shown.map(k => `<circle class="am-hdot" data-k="${k}" r="4.5" cx="0" cy="0" fill="#fff" stroke="${STAGE[k].color}" stroke-width="2.25"/>`).join("") + `</g>`;
+    g += `<rect x="${L - 6}" y="${Tp}" width="${w - L - Rt + 12}" height="${barTop + barH - Tp}" fill="transparent"/>`;
+    el.innerHTML = svgOpen(w, H, `Conversion over the last ${n} weeks. Hover or use the arrow keys to see any week.`, animate ? "ls-anim" : "") + g + `</svg>`;
+    return { svg: el.querySelector("svg"), n, x, y, w, L, Rt };
+  }
+
+  /* Horizontal bars. rows [{label, a, b?}]; opts {pct, benchA, benchB, labelA, labelB, aria, click} */
+  function chartBars(el, rows, opts, animate) {
+    const w = W(el), two = rows.some(r => r.b !== undefined);
+    const rowH = two ? 30 : 24, Tp = 24, B = opts.pct ? 22 : 6, L = Math.round(Math.min(170, Math.max(96, w * 0.26))), Rt = 50;
+    const H = Tp + B + rows.length * rowH;
+    const raw = Math.max(1e-9, ...rows.map(r => Math.max(r.a || 0, r.b || 0)), opts.benchA || 0, opts.benchB || 0);
+    const max = opts.pct ? Math.min(1, Math.ceil(raw * 10) / 10) : raw;
+    const x = v => L + (w - L - Rt) * Math.min(1, v / max), fmt = v => (opts.pct ? pct1(v) : int0(v));
+    let g = "";
+    if (opts.pct) for (let v = 0; v <= max + 1e-9; v += max > 0.5 ? 0.2 : 0.1) g += `<line x1="${x(v)}" x2="${x(v)}" y1="${Tp - 6}" y2="${H - B}" stroke="${C.grid}"/>` + txt(x(v), H - 6, pct0(v));
+    rows.forEach((r, i) => {
+      const y0 = Tp + i * rowH, bh = two ? 10 : 12, d = Math.min(0.6, i * 0.035);
+      g += `<g class="ls-row" data-i="${i}"><rect x="0" y="${y0}" width="${w}" height="${rowH}" fill="transparent"/>`;
+      g += `<text x="${L - 8}" y="${y0 + (two ? 16 : 12)}" text-anchor="end" font-size="11" font-weight="600" fill="${C.occ}">${esc(r.label)}</text>`;
+      [[r.a, C.leased, 2], two ? [r.b, C.occ, 14] : null].filter(Boolean).forEach(([v, col, dy]) => {
+        g += `<rect class="ls-gx" style="--d:${d}s" x="${L}" y="${y0 + dy}" width="${Math.max(1, x(v || 0) - L).toFixed(1)}" height="${bh}" rx="1.5" fill="${col}"/>`;
+        g += `<text class="ls-fade" style="--d:${0.45 + d}s" x="${(x(v || 0) + 5).toFixed(1)}" y="${y0 + dy + bh - 1}" font-size="11" fill="${C.text}">${fmt(v || 0)}</text>`;
+      });
+      g += `</g>`;
+    });
+    [[opts.benchA, C.leased, opts.labelA], [opts.benchB, C.occ, opts.labelB]].forEach(([b, col, lab]) => {
+      if (!b) return;
+      g += `<line x1="${x(b)}" x2="${x(b)}" y1="${Tp - 8}" y2="${H - B}" stroke="${col}" stroke-width="1.5" stroke-dasharray="2 4" pointer-events="none"/>`;
+      g += `<text x="${x(b)}" y="${Tp - 12}" text-anchor="middle" font-size="11" fill="${col}">${esc(lab || pct0(b))}</text>`;
+    });
+    el.innerHTML = svgOpen(w, H, (opts.aria || "Bar chart") + ". Hover a row, or use the arrow keys.", `${animate ? "ls-anim" : ""} ${opts.click ? "ls-click" : ""}`) + g + `</svg>`;
+    return el.querySelector("svg");
+  }
+
+  /* ---------- filters, in the cover's chip style ---------- */
+  function filtersHtml() {
+    const all = commKeys(), I = all.map(info);
+    const rms = [...new Set(I.map(x => x.rm).filter(r => r && r !== "—"))].sort();
+    const mg = [...new Set(I.map(x => x.mgmt).filter(Boolean))].sort();
+    const chip = (f, v, label, n) => `<button class="am-fchip ${(f === "weeks" ? String(prefs.weeks) : F[f]) === String(v) ? "on" : ""}" data-f="${f}" data-v="${esc(v)}">${esc(label)}${n !== undefined ? ` <span>${n}</span>` : ""}</button>`;
+    const group = (label, html) => `<div class="am-filter"><span class="am-filter-label">${label}</span>${html}</div>`;
+    return `<div class="am-filters">
+      ${group("Period", PERIODS.map(([w, l]) => chip("weeks", w, l)).join(""))}
+      ${group("Regional", chip("rm", "all", "All") + rms.map(r => chip("rm", r, r.split(" ")[0], I.filter(x => x.rm === r).length)).join(""))}
+      ${mg.length > 1 ? group("Management", chip("mgmt", "all", "All") + mg.map(m => chip("mgmt", m, m.split(" ")[0], I.filter(x => x.mgmt === m).length)).join("")) : ""}
+      <div class="am-filter-count">${comm === "all" ? `Showing ${scopeKeys().length} of ${all.length} communities` : `Showing ${esc(info(comm).name)} only`}</div>
+    </div>`;
+  }
+
+  /* ---------- Lead Conversion ---------- */
+  function communityRows() {
+    const m = totalsBy(r => inPeriod(r) && included(r), r => r.k);
+    return commKeys().map(k => {
+      const o = m.get(k) || zero(), rt = rates(o), low = lowOf(o);
+      return { k, o, rt, low, ranked: !low.ll && !info(k).pre };
+    }).filter(c => c.o.l > 0);
+  }
+  const trendView = { weeks: 8, series: { lt: true, ta: false, al: false, ll: true } };
+  let periodTotals = null;
+
+  /* Fill the strip and tiles from a set of totals (the period, or one hovered week) */
+  function paintNumbers(o, week, animate) {
+    const r = rates(o), low = lowOf(o), pw = prefs.weeks, el = $("lsConversionCardBody"); if (!el) return;
+    const set = (sel, html) => { const n = el.querySelector(sel); if (n) n.innerHTML = html; };
+    const count = (v, fmt) => animate ? ` data-count="${v}" data-fmt="${fmt}"` : "";
+    set('[data-strip="l"] strong', `<b class="ls-n"${count(o.l, "int")}>${int0(o.l)}</b>`);
+    set('[data-strip="l"] em', week ? `week ending ${md(week)}` : `${int0(o.l / pw)} a week, ${periodText()}`);
+    set('[data-strip="t"] strong', `<b class="ls-n"${count(o.t, "int")}>${int0(o.t)}</b>`); set('[data-strip="t"] em', `${pct1(r.lt)} of leads`);
+    set('[data-strip="a"] strong', `<b class="ls-n"${count(o.a, "int")}>${int0(o.a)}</b>`); set('[data-strip="a"] em', `${pct1(r.ta)} of tours`);
+    set('[data-strip="x"] strong', `<b class="ls-n"${count(o.x, "int")}>${int0(o.x)}</b>`); set('[data-strip="x"] em', `${pct1(r.al)} of applications`);
+    Object.keys(STAGE).forEach(k => {
+      const tile = el.querySelector(`.am-tile[data-series="${k}"]`); if (!tile) return;
+      const v = r[k], isLow = low[k] || v === null, d = isLow ? null : v - BENCH[k];
+      tile.querySelector(".am-tile-value").innerHTML = isLow ? "—" : `<b class="ls-n"${count(v, "pct")}>${pct1(v)}</b>`;
+      const dl = tile.querySelector(".am-tile-delta");
+      dl.className = `am-tile-delta ${d === null ? "" : d >= 0 ? "good" : "bad"}`;
+      dl.innerHTML = isLow ? "Too few to judge" : `${pts(d)} <span>vs ${pct0(BENCH[k])} ${k === "ll" ? "goal" : "benchmark"}</span>`;
+    });
+    const wl = $("lsWeekLabel");
+    if (wl) { wl.textContent = week ? `Week ending ${mdy(week)}` : `${periodText().replace(/^./, c => c.toUpperCase())}`; wl.classList.toggle("is-past", !!week); }
+    if (animate) countUp(el); else stopCount(el);
+  }
+
+  function weekSeries(nWeeks) {
+    return weekEnds.slice(-nWeeks).map((d, i) => {
+      const wi = WEEKS - nWeeks + i, o = total(q => q.w === wi && inScope.has(q.k) && included(q));
+      const r = rates(o), lo = lowOf(o);
+      return { d, o, r: { lt: lo.lt ? null : r.lt, ta: lo.ta ? null : r.ta, al: lo.al ? null : r.al, ll: lo.ll ? null : r.ll } };
+    });
+  }
+
+  function drawTrend(animate) {
+    const host = $("lsChartTrend"); if (!host) return;
+    const weeks = weekSeries(trendView.weeks);
+    /* Wide screens: chart left, cards right (as in This Week). Size the chart
+       to end level with the last row of cards. */
+    let height = null;
+    const side = root.querySelector("#lsWeekBody > .ls-side"), bar = root.querySelector("#lsWeekBody > .am-chart-bar");
+    if (window.matchMedia("(min-width: 1280px)").matches && side && bar)
+      height = side.offsetHeight - (bar.offsetHeight + parseFloat(getComputedStyle(bar).marginBottom || 0));
+    const c = chartTrend(host, weeks, trendView.series, animate, height);
+    const svg = c.svg, hover = svg.querySelector(".am-hover"), guide = svg.querySelector(".am-guide");
+    let cur = null;
+    const show = i => {
+      i = Math.max(0, Math.min(c.n - 1, i)); cur = i;
+      const gx = c.x(i);
+      hover.style.display = ""; guide.setAttribute("x1", gx); guide.setAttribute("x2", gx);
+      svg.querySelectorAll(".am-hdot").forEach(dot => {
+        const v = weeks[i].r[dot.dataset.k];
+        if (v === null) { dot.style.display = "none"; return; }
+        dot.style.display = ""; dot.setAttribute("cx", gx); dot.setAttribute("cy", c.y(v));
+      });
+      svg.querySelectorAll(".am-netbar").forEach(b => b.classList.toggle("is-dim", +b.dataset.i !== i));
+      paintNumbers(weeks[i].o, weeks[i].d, false);
+    };
+    const clear = () => {
+      if (cur === null) return;
+      cur = null; hover.style.display = "none";
+      svg.querySelectorAll(".am-netbar").forEach(b => b.classList.remove("is-dim"));
+      paintNumbers(periodTotals, null, false);
+    };
+    const toIndex = e => { const r = svg.getBoundingClientRect(), vx = ((e.clientX - r.left) / r.width) * c.w; return Math.round(((vx - c.L) / (c.w - c.L - c.Rt)) * (c.n - 1)); };
+    svg.addEventListener("pointermove", e => show(toIndex(e)));
+    svg.addEventListener("pointerdown", e => show(toIndex(e)));
+    svg.addEventListener("pointerleave", clear);
+    svg.addEventListener("focus", () => { if (cur === null && svg.matches(":focus-visible")) show(c.n - 1); });
+    svg.addEventListener("blur", clear);
+    svg.addEventListener("keydown", e => {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); show((cur ?? c.n - 1) + (e.key === "ArrowLeft" ? -1 : 1)); }
+      if (e.key === "Escape") clear();
+    });
+    const lg = $("lsTrendLegend");
+    if (lg) lg.innerHTML = legendLine("Benchmark / goal", C.text, true) + legendSq("Weekly leads", C.net);
+  }
+
+  function renderConversion(animate) {
+    const o = total(scope), r = rates(o), low = lowOf(o);
+    periodTotals = o;
+    const floors = BENCH.lt * BENCH.ta * BENCH.al;
+    const st = r.ll === null ? "pre" : r.ll >= BENCH.ll ? "ok" : r.ll >= BENCH.ll * 0.75 ? "wat" : "att";
+    const stLabel = { ok: "At goal", wat: "Near goal", att: "Below goal", pre: "No leads" }[st];
+    const scopeLabel = comm !== "all" ? info(comm).name : F.rm !== "all" ? F.rm : F.mgmt !== "all" ? F.mgmt : "All communities";
+    const gapOf = k => (r[k] && r[k] < BENCH[k] && !low[k]) ? Math.round(o.x * (BENCH[k] / r[k] - 1)) : 0;
+    const gaps = ["lt", "ta", "al"].filter(k => r[k] !== null && r[k] > 0 && !low[k]).map(k => ({ k, ratio: r[k] / BENCH[k] })).sort((a, b) => a.ratio - b.ratio);
+    let why = "Every stage is at or above benchmark";
+    if (gaps.length && gaps[0].ratio < 1) {
+      const k = gaps[0].k, add = gapOf(k);
+      why = `Biggest gap: ${STAGE[k].label.toLowerCase()}, ${pct1(r[k])} against ${pct0(BENCH[k])} · reaching benchmark there alone would add about ${int0(add)} lease${add === 1 ? "" : "s"}`;
+    }
+    if (!o.l) why = "No leads in this view";
+
+    const pw = prefs.weeks, pace = [];
+    if (r.ta && r.al) pace.push(`Lead to tour needs about ${pct0(Math.min(1, BENCH.ll / (r.ta * r.al)))} to reach the ${pct0(BENCH.ll)} goal at today's later-stage rates`);
+    pace.push(`Benchmarks at every stage give ${(floors * 100).toFixed(1)}% lead to lease`);
+    if (pw > 1) {
+      const last = total(q => inScope.has(q.k) && included(q) && q.w === WEEKS - 1);
+      const prior = total(q => inScope.has(q.k) && included(q) && q.w >= WEEKS - 1 - pw && q.w < WEEKS - 1);
+      pace.push(`Last week ${int0(last.l)} leads at ${pct1(div(last.t, last.l))} lead to tour, against ${int0(prior.l / pw)} a week at ${pct1(div(prior.t, prior.l))} over the prior ${pw} weeks`);
+    }
+
+    let lists;
+    if (comm === "all") {
+      const ranked = communityRows().filter(c => c.ranked && inScope.has(c.k)).sort((a, b) => b.rt.ll - a.rt.ll);
+      const top = ranked.slice(0, 3), bottom = ranked.slice(3).slice(-3).reverse();
+      const li = c => `<li>${link(c.k)}<strong class="${c.rt.ll >= BENCH.ll ? "am-pos" : "am-neg"}">${pct1(c.rt.ll)}</strong><span>${pct1(c.rt.lt)} to tour · ${int0(c.o.l)} leads</span></li>`;
+      const none = "<li class='am-empty'>No community has enough leads to rank</li>";
+      lists = `<div><h5>Leading</h5><ol class="am-movers">${top.map(li).join("") || none}</ol></div>
+        <div><h5>To Focus On</h5><ol class="am-movers">${bottom.map(li).join("") || none}</ol></div>`;
+    } else {
+      const ra = rates(total(q => inPeriod(q) && included(q)));
+      const li = k => `<li><div class="excel-row-label">${STAGE[k].label}</div><strong class="${low[k] ? "" : r[k] >= BENCH[k] ? "am-pos" : "am-neg"}">${low[k] ? "—" : pct1(r[k])}</strong><span>portfolio ${pct1(ra[k])}</span></li>`;
+      const rank = k => {
+        const list = communityRows().filter(c => c.ranked && !c.low[k] && c.rt[k] !== null).sort((a, b) => b.rt[k] - a.rt[k]);
+        const p = list.findIndex(c => c.k === comm);
+        return `<li><div class="excel-row-label">${STAGE[k].label}</div><strong>${p >= 0 ? `${p + 1} of ${list.length}` : "—"}</strong><span>${p >= 0 ? "among ranked" : info(comm).pre ? "pre-delivery" : "too few leads"}</span></li>`;
+      };
+      lists = `<div><h5>Against the Portfolio</h5><ol class="am-movers">${Object.keys(STAGE).map(li).join("")}</ol></div>
+        <div><h5>Where It Ranks</h5><ol class="am-movers">${Object.keys(STAGE).map(rank).join("")}</ol></div>`;
+    }
+
+    const tile = k => `<button type="button" class="am-tile am-tile-toggle${trendView.series[k] ? " on" : ""}" data-series="${k}" aria-pressed="${trendView.series[k]}"
+        style="--series:${STAGE[k].color}" title="${trendView.series[k] ? "Hide" : "Show"} ${STAGE[k].label.toLowerCase()} on the weekly chart">
+        <div class="am-tile-label">${STAGE[k].label}</div><div class="am-tile-value">—</div><div class="am-tile-delta">—</div></button>`;
+    $("lsConversionCardBody").innerHTML = `
+      ${filtersHtml()}
+      <div id="lsWeekBody">
+      <div class="am-status-head">
+        <span class="am-chip am-chip-${st}">${stLabel}</span>
+        <span class="am-chip am-chip-book">${esc(scopeLabel)}</span>
+        <span class="am-status-why">${esc(why)}</span>
+        <span class="am-week-label" id="lsWeekLabel"></span>
+      </div>
+      <div class="ls-side">
+      <div class="am-strip">
+        <div data-strip="l"><span>Leads</span><strong></strong><em></em></div>
+        <div data-strip="t"><span>Tours</span><strong></strong><em></em></div>
+        <div data-strip="a"><span>Applications</span><strong></strong><em></em></div>
+        <div data-strip="x"><span>Leases</span><strong></strong><em></em></div>
+      </div>
+      <div class="am-tiles am-tiles-4">${Object.keys(STAGE).map(tile).join("")}</div>
+      </div>
+      <div class="am-chart-bar">
+        <div class="am-legend" id="lsTrendLegend"></div>
+        <div class="am-range" role="group" aria-label="Chart range">${[8, 13].map(n => `<button type="button" class="am-btn-seg${trendView.weeks === n ? " on" : ""}" data-trend-weeks="${n}">${n} wk</button>`).join("")}</div>
+      </div>
+      <div class="am-chart-wrap" id="lsChartTrend"></div>
+      </div>
+      <div class="am-pace">${pace.map(esc).join(" · ")}</div>
+      <div class="am-books" style="margin-top:1.1rem;">
+        <div class="am-book"><div class="am-book-head"><h4>Conversion vs Benchmark</h4><span>${periodText()}</span></div>
+          <div class="am-legend" style="margin-top:0;">${legendSq("Actual", C.leased)}${legendSq("Benchmark", C.net)}</div>
+          <div class="am-chart-wrap" id="lsChartStages"></div><div class="ls-readout" id="lsStagesReadout"></div></div>
+        <div class="am-book"><div class="am-book-head"><h4>${comm === "all" ? "Leading and Lagging Communities" : "How It Compares"}</h4><span>lead to lease, ${periodText()}</span></div>
+          <div class="am-movers-grid" style="grid-template-columns:1fr;margin-top:0;">${lists}</div></div>
+      </div>
+      <p class="am-footnote">Click a stage tile to add or remove its line on the weekly chart. Hover the chart, or use the arrow keys, to see any week; the numbers above follow. Leases are approved leases. Communities with fewer than ${MIN.leads} leads in the period, and pre-delivery communities, are not ranked. Source: Entrata Lead Source Attribution.</p>`;
+
+    paintNumbers(o, null, animate);
+    drawTrend(animate);
+    const stagesSvg = chartStages($("lsChartStages"), { lt: low.lt ? null : r.lt, ta: low.ta ? null : r.ta, al: low.al ? null : r.al, ll: low.ll ? null : r.ll }, animate);
+    const ro = $("lsStagesReadout"), keys = ["lt", "ta", "al", "ll"];
+    const idle = "Hover a stage to see its gap to benchmark.";
+    ro.textContent = idle;
+    wireRows(stagesSvg, 4, i => {
+      if (i < 0) { ro.textContent = idle; ro.classList.remove("is-on"); return; }
+      const k = keys[i], v = r[k];
+      ro.classList.add("is-on");
+      if (low[k] || v === null) { ro.textContent = `${STAGE[k].label}: too few to judge`; return; }
+      const add = k === "ll" ? 0 : gapOf(k);
+      ro.textContent = `${STAGE[k].label} ${pct1(v)} vs ${pct0(BENCH[k])} ${k === "ll" ? "goal" : "benchmark"} · ${pts(v - BENCH[k])}` +
+        (add > 0 ? ` · about ${int0(add)} more lease${add === 1 ? "" : "s"} at benchmark` : k === "ll" ? ` · ${int0(o.x)} leases from ${int0(o.l)} leads` : " · at or above benchmark");
+    }, { horizontal: true });
+    badge("lsConversionCardBadge", isLive ? `As of ${updatedAt ? mdy(new Date(updatedAt)) : mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+  }
+
+  /* ---------- Communities (sortable, frozen, like the cover tables) ---------- */
+  const COMM_COLS = [
+    ["name", "Community"], ["rank", "Rank"], ["rm", "Regional Manager"], ["market", "Market"], ["occ", "Occupancy"],
+    ["l", "Leads"], ["t", "Tours"], ["a", "Apps"], ["x", "Leases"],
+    ["lt", `Lead to Tour (${pct0(BENCH.lt)})`], ["ta", `Tour to App (${pct0(BENCH.ta)})`], ["al", `App to Lease (${pct0(BENCH.al)})`],
+    ["ll", `Lead to Lease (${pct0(BENCH.ll)})`], ["stages", "Stages at Benchmark"]
+  ];
+  const commState = { sortCol: 12, sortDir: "desc" };
+  const chartSort = { by: "ll" };
+  function renderCommunities(animate) {
+    const all = communityRows();
+    all.filter(c => c.ranked).sort((a, b) => b.rt.ll - a.rt.ll).forEach((c, i) => { c.rank = i + 1; });
+    const rows = all.filter(c => inScope.has(c.k));
+    const judged = c => ["lt", "ta", "al", "ll"].filter(f => !c.low[f]);
+    const at = c => judged(c).filter(f => c.rt[f] >= BENCH[f]).length;
+    const val = (c, col) => {
+      const I = info(c.k);
+      switch (col) {
+        case "name": return I.name.toLowerCase(); case "rank": return c.rank ?? null; case "rm": return I.rm.toLowerCase(); case "market": return String(I.market).toLowerCase();
+        case "occ": return I.occ; case "l": case "t": case "a": case "x": return c.o[col];
+        case "stages": return judged(c).length ? at(c) / judged(c).length : null;
+        case "ll": return c.ranked ? c.rt.ll : null;
+        default: return c.low[col] ? null : c.rt[col];
+      }
+    };
+    const colKey = COMM_COLS[commState.sortCol][0];
+    rows.sort((a, b) => {
+      const av = val(a, colKey), bv = val(b, colKey);
+      if (av === null && bv === null) return info(a.k).name.localeCompare(info(b.k).name);
+      if (av === null) return 1; if (bv === null) return -1;
+      const d = typeof av === "string" ? av.localeCompare(bv) : av - bv;
+      return (commState.sortDir === "asc" ? d : -d) || info(a.k).name.localeCompare(info(b.k).name);
+    });
+    const tot = rows.reduce((o, c) => { o.l += c.o.l; o.t += c.o.t; o.a += c.o.a; o.x += c.o.x; return o; }, zero());
+    let ou = 0, uu = 0; rows.forEach(c => { const I = info(c.k); if (I.occ !== null && I.units) { ou += I.occ * I.units; uu += I.units; } });
+    const tr = rates(tot);
+    const head = `<thead><tr>${COMM_COLS.map(([, lab], i) => `<th style="cursor:pointer;user-select:none;" data-ls-sort="${i}">${esc(lab)}${i === commState.sortCol ? (commState.sortDir === "asc" ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>`;
+    const body = rows.map(c => {
+      const I = info(c.k), j = judged(c), n = at(c);
+      return `<tr><td class="excel-row-label">${link(c.k)}${I.pre ? ' <span class="am-tag">pre-delivery</span>' : ""}</td>
+        <td class="excel-number">${c.rank ?? "—"}</td><td class="excel-number">${esc(I.rm)}</td><td class="excel-number">${esc(I.market)}</td>
+        <td class="excel-number">${pct1(I.occ)}</td>${numCell(c.o.l)}${numCell(c.o.t)}${numCell(c.o.a)}${numCell(c.o.x)}
+        ${rateCell(c.rt.lt, BENCH.lt, c.low.lt)}${rateCell(c.rt.ta, BENCH.ta, c.low.ta)}${rateCell(c.rt.al, BENCH.al, c.low.al)}${rateCell(c.rt.ll, BENCH.ll, c.low.ll)}
+        <td class="excel-number ${j.length && n === j.length ? "is-positive" : n === 0 && j.length ? "is-negative" : ""}">${j.length ? `${n} of ${j.length}` : "—"}</td></tr>`;
+    }).join("");
+    const totalRow = `<tr class="excel-total"><td class="excel-row-label">Portfolio Total / Avg</td><td class="excel-number">—</td><td class="excel-number">—</td><td class="excel-number">—</td>
+      <td class="excel-number">${uu ? pct1(ou / uu) : "—"}</td>${numCell(tot.l)}${numCell(tot.t)}${numCell(tot.a)}${numCell(tot.x)}
+      <td class="excel-number">${pct1(tr.lt)}</td><td class="excel-number">${pct1(tr.ta)}</td><td class="excel-number">${pct1(tr.al)}</td><td class="excel-number">${pct1(tr.ll)}</td><td class="excel-number">—</td></tr>`;
+    fillFrozen("lsCommunitiesCard", "", head + `<tbody>${body || `<tr><td class="excel-row-label">No leads in this view</td>${'<td class="excel-number">—</td>'.repeat(13)}</tr>`}${totalRow}</tbody>`,
+      `Green is at or above benchmark, red is more than 10% below it. Low volume means fewer than ${MIN.leads} leads, ${MIN.tours} tours or ${MIN.apps} applications behind the rate. Rank is lead to lease across every community with enough leads, whatever the filters.`);
+    badge("lsCommunitiesCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+    drawByCommunity(animate);
+  }
+
+  function drawByCommunity(animate) {
+    const host = $("lsByCommunityChart"); if (!host) return;
+    const by = chartSort.by;
+    const rankOf = new Map(communityRows().filter(c => c.ranked).sort((a, b) => b.rt.ll - a.rt.ll).map((c, i) => [c.k, i + 1]));
+    const list = communityRows().filter(c => c.ranked && inScope.has(c.k))
+      .sort((a, b) => by === "l" ? b.o.l - a.o.l : (b.rt[by] || 0) - (a.rt[by] || 0));
+    $("lsByCommunitySort").innerHTML = [["ll", "Lead to lease"], ["lt", "Lead to tour"], ["l", "Leads"]]
+      .map(([v, l]) => `<button type="button" class="am-btn-seg${by === v ? " on" : ""}" data-chart-sort="${v}">${l}</button>`).join("");
+    $("lsByCommunityLegend").innerHTML = `${legendSq("Lead to tour", C.leased)}${legendSq("Lead to lease", C.occ)}${legendLine("Benchmark / goal", C.text, true)}`;
+    const ro = $("lsByCommunityReadout");
+    if (!list.length) { host.innerHTML = `<p class="am-empty">No community in this view has enough leads to rank.</p>`; ro.textContent = ""; return; }
+    const svg = chartBars(host, list.map(c => ({ label: info(c.k).name.replace(/^(Garrett|The)\s+/, ""), a: c.rt.lt || 0, b: c.rt.ll || 0 })),
+      { pct: true, benchA: BENCH.lt, benchB: BENCH.ll, labelA: `${pct0(BENCH.lt)} benchmark`, labelB: `${pct0(BENCH.ll)} goal`, aria: "Lead to tour and lead to lease by community", click: true }, animate);
+    const idle = `${list.length} ranked communities. Hover a row for its numbers; click it to show only that community.`;
+    ro.textContent = idle; ro.classList.remove("is-on");
+    wireRows(svg, list.length, i => {
+      if (i < 0) { ro.textContent = idle; ro.classList.remove("is-on"); return; }
+      const c = list[i];
+      ro.classList.add("is-on");
+      ro.textContent = `${info(c.k).name} · ${int0(c.o.l)} leads · ${int0(c.o.t)} tours · ${int0(c.o.x)} leases · ${pct1(c.rt.lt)} to tour · ${pct1(c.rt.ll)} to lease · rank ${rankOf.get(c.k)}`;
+    }, { onPick: i => { setComm(list[i].k); const el = $("lsConversionCard"); if (el) scrollToCard(el); } });
+    badge("lsByCommunityCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+  }
+
+  /* ---------- Agent Scorecard + Leasing Staff ---------- */
+  const GRADE_CHIP = { A: "ok", B: "pre", C: "wat", D: "att" };
+  const grade = (lt, leads) => leads < MIN.agentLeads || lt === null ? null : lt >= BENCH.lt ? "A" : lt >= 0.15 ? "B" : lt >= 0.10 ? "C" : "D";
+  function renderAgents(animate) {
+    const typeOf = r => (handlers[r.h] || {}).type || "none";
+    const byType = totalsBy(scope, typeOf);
+    const all = total(scope), staff = byType.get("staff") || zero(), sr = rates(staff), low = lowOf(staff);
+    const port = rates(total(r => inPeriod(r) && included(r) && typeOf(r) === "staff"));
+    const narrowed = comm !== "all" || F.rm !== "all" || F.mgmt !== "all";
+    const cmp = f => narrowed ? ` · all staff ${pct1(port[f])}` : "";
+    const cnt = (v, fmt, shown) => animate ? `<b class="ls-n" data-count="${v}" data-fmt="${fmt}">${shown}</b>` : shown;
+    const kpi = (label, f, counts, goal) => `<div><span>${label}</span><strong class="${low[f] || sr[f] === null ? "" : sr[f] >= BENCH[f] ? "am-pos" : sr[f] < BENCH[f] * 0.9 ? "am-neg" : ""}">${low[f] ? "—" : cnt(sr[f], "pct", pct1(sr[f]))}</strong>
+      <em>${goal ? "goal" : "benchmark"} ${pct0(BENCH[f])}${cmp(f)} · ${counts}</em></div>`;
+    const who = WHO.map(([t, lab]) => {
+      const o = byType.get(t) || zero(), r = rates(o), lo = lowOf(o);
+      return `<tr><td class="excel-row-label">${lab}</td>${numCell(o.l)}<td class="excel-number">${pct1(div(o.l, all.l))}</td>${numCell(o.t)}${rateCell(r.lt, BENCH.lt, lo.lt)}${numCell(o.x)}${rateCell(r.ll, BENCH.ll, lo.ll)}</tr>`;
+    }).join("");
+    const ar = rates(all);
+    const parked = ["house", "none"].reduce((o, t) => { const v = byType.get(t) || zero(); o.l += v.l; o.t += v.t; return o; }, zero());
+    fillFrozen("lsAgentsCard",
+      `<div class="am-strip">
+        <div><span>Leads assigned to people</span><strong>${cnt(staff.l, "int", int0(staff.l))}</strong><em>${pct1(div(staff.l, all.l))} of ${int0(all.l)} leads in view</em></div>
+        ${kpi("Lead to tour", "lt", `${int0(staff.t)} tours`)}${kpi("Tour to application", "ta", `${int0(staff.a)} apps`)}${kpi("Lead to lease", "ll", `${int0(staff.x)} leases`, true)}
+      </div>`,
+      `<thead><tr><th>Handled By</th><th>Leads</th><th>Share</th><th>Tours</th><th>Lead to Tour</th><th>Leases</th><th>Lead to Lease</th></tr></thead>
+       <tbody>${who}<tr class="excel-total"><td class="excel-row-label">All Leads</td>${numCell(all.l)}<td class="excel-number">100.0%</td>${numCell(all.t)}<td class="excel-number">${pct1(ar.lt)}</td>${numCell(all.x)}<td class="excel-number">${pct1(ar.ll)}</td></tr></tbody>`,
+      `${pct1(div(parked.l, all.l))} of leads in view sit in a house account or with no one assigned, and ${pct1(div(parked.t, parked.l))} of those toured. Entrata assigns a lead to a person once someone works it, so these are the leads nobody picked up. Person counts from Entrata's Lead Conversion report run slightly below Lead Source totals.`);
+    if (animate) countUp($("lsAgentsCardTop"));
+    badge("lsAgentsCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+
+    const people = totalsBy(r => scope(r) && typeOf(r) === "staff", r => r.h);
+    const list = [...people.entries()].map(([h, o]) => ({ h, o, r: rates(o), g: grade(div(o.t, o.l), o.l) }))
+      .sort((a, b) => (!!b.g - !!a.g) || (b.r.lt || 0) - (a.r.lt || 0) || b.o.l - a.o.l);
+    let n = 0;
+    const rows = list.map(p => {
+      const H = handlers[p.h], lo = { l: p.o.l < MIN.agentLeads, t: p.o.t < MIN.tours };
+      return `<tr><td class="excel-row-label">${p.g ? `${++n}. ` : ""}${esc(H.name)}</td><td class="excel-number">${esc(H.role || "—")}</td><td class="excel-number">${link(H.k)}</td>
+        ${numCell(p.o.l)}${numCell(p.o.t)}${numCell(p.o.a)}${numCell(p.o.x)}
+        ${rateCell(p.r.lt, BENCH.lt, lo.l)}${rateCell(p.r.ta, BENCH.ta, lo.t)}${rateCell(p.r.ll, BENCH.ll, lo.l)}
+        <td class="excel-number">${p.g ? `<span class="am-chip am-chip-${GRADE_CHIP[p.g]}">${p.g}</span>` : '<span class="excel-muted">Not graded</span>'}</td></tr>`;
+    }).join("");
+    const st = list.reduce((o, p) => { o.l += p.o.l; o.t += p.o.t; o.a += p.o.a; o.x += p.o.x; return o; }, zero()), str = rates(st);
+    fillFrozen("lsStaffCard", "",
+      `<thead><tr><th>Person</th><th>Role</th><th>Home Community</th><th>Leads</th><th>Tours</th><th>Apps</th><th>Leases</th><th>Lead to Tour</th><th>Tour to App</th><th>Lead to Lease</th><th>Grade</th></tr></thead>
+       <tbody>${rows || `<tr><td class="excel-row-label">No leads assigned to leasing staff</td>${'<td class="excel-number">—</td>'.repeat(10)}</tr>`}
+       <tr class="excel-total"><td class="excel-row-label">All Leasing Staff (${list.length})</td><td class="excel-number">—</td><td class="excel-number">—</td>${numCell(st.l)}${numCell(st.t)}${numCell(st.a)}${numCell(st.x)}
+         <td class="excel-number">${pct1(str.lt)}</td><td class="excel-number">${pct1(str.ta)}</td><td class="excel-number">${pct1(str.ll)}</td><td class="excel-number">—</td></tr></tbody>`,
+      `Ranked by lead to tour. Grade: A at or above the ${pct0(BENCH.lt)} benchmark, B 15% or higher, C 10% or higher, D below 10%. People with fewer than ${MIN.agentLeads} leads in the period are listed but not graded.`);
+    badge("lsStaffCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+  }
+
+  /* ---------- Lead Sources, charts, detail ---------- */
+  const onOff = (kind, name, on) => `<div class="am-pw-decide"><button class="am-btn-seg ${on ? "on" : ""}" data-ls-toggle="${kind}" data-name="${esc(name)}" data-on="1" aria-pressed="${on}">On</button><button class="am-btn-seg ${on ? "" : "on"}" data-ls-toggle="${kind}" data-name="${esc(name)}" data-on="0" aria-pressed="${!on}">Off</button></div>`;
+  function renderSources(animate) {
+    const bySrc = totalsBy(r => inScope.has(r.k) && inPeriod(r), r => r.s);
+    const groups = allGroups(), gTot = new Map(groups.map(g => [g, zero()]));
+    sources.forEach((s, i) => { const o = bySrc.get(i); if (!o || prefs.srcOff[s.name]) return; const t = gTot.get(groupOf(s)); t.l += o.l; t.t += o.t; t.a += o.a; t.x += o.x; });
+    const on = zero();
+    groups.forEach(g => { if (!prefs.grpOff[g]) { const t = gTot.get(g); on.l += t.l; on.t += t.t; on.a += t.a; on.x += t.x; } });
+    const ot = rates(on);
+    const gRows = groups.filter(g => gTot.get(g).l > 0 || prefs.grpOff[g]).sort((a, b) => gTot.get(b).l - gTot.get(a).l).map(g => {
+      const o = gTot.get(g), r = rates(o), lo = lowOf(o), isOn = !prefs.grpOff[g];
+      return `<tr><td class="excel-row-label ${isOn ? "" : "excel-muted"}">${esc(g)}</td><td class="excel-number">${onOff("group", g, isOn)}</td>
+        ${numCell(o.l)}<td class="excel-number">${isOn ? pct1(div(o.l, on.l)) : "Off"}</td>${numCell(o.t)}${rateCell(r.lt, BENCH.lt, lo.lt)}${numCell(o.a)}${numCell(o.x)}${rateCell(r.ll, BENCH.ll, lo.ll)}</tr>`;
+    }).join("");
+    fillFrozen("lsSourcesCard", "",
+      `<thead><tr><th>Source Group</th><th>Included</th><th>Leads</th><th>Share</th><th>Tours</th><th>Lead to Tour</th><th>Apps</th><th>Leases</th><th>Lead to Lease</th></tr></thead>
+       <tbody>${gRows}<tr class="excel-total"><td class="excel-row-label">All Included Sources</td><td class="excel-number">—</td>${numCell(on.l)}<td class="excel-number">100.0%</td>${numCell(on.t)}
+         <td class="excel-number">${pct1(ot.lt)}</td>${numCell(on.a)}${numCell(on.x)}<td class="excel-number">${pct1(ot.ll)}</td></tr></tbody>`,
+      `Turning a group off removes its leads from every report on this page. Change which group a source belongs to in Lead Sources Detail. These choices are saved in this browser.`);
+    badge("lsSourcesCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+
+    /* charts */
+    const gl = groups.filter(g => !prefs.grpOff[g] && gTot.get(g).l > 0).sort((a, b) => gTot.get(b).l - gTot.get(a).l);
+    $("lsSourceChartsCardBody").innerHTML = `
+      <div class="am-books">
+        <div class="am-book"><div class="am-book-head"><h4>Leads by Source Group</h4><span>${periodText()}</span></div>
+          <div class="am-chart-wrap" id="lsChartGroupLeads"></div><div class="ls-readout" id="lsGroupLeadsReadout"></div></div>
+        <div class="am-book"><div class="am-book-head"><h4>Lead to Tour by Source Group</h4><span>benchmark ${pct0(BENCH.lt)}</span></div>
+          <div class="am-chart-wrap" id="lsChartGroupLT"></div><div class="ls-readout" id="lsGroupLTReadout"></div></div>
+      </div>
+      <p class="am-footnote">Hover a bar, or use the arrow keys, to see the group's full funnel. Click a bar to turn that group off; turn it back on in Lead Sources.</p>`;
+    if (gl.length) {
+      const detail = g => { const o = gTot.get(g), r = rates(o); return `${g} · ${int0(o.l)} leads (${pct1(div(o.l, on.l))}) · ${int0(o.t)} tours · ${int0(o.a)} apps · ${int0(o.x)} leases · ${pct1(r.lt)} to tour · ${pct1(r.ll)} to lease`; };
+      const off = i => { prefs.grpOff[gl[i]] = 1; savePrefs(); render(true); };
+      [["lsChartGroupLeads", "lsGroupLeadsReadout", gl.map(g => ({ label: g, a: gTot.get(g).l })), { aria: "Leads by source group", click: true }],
+       ["lsChartGroupLT", "lsGroupLTReadout", gl.map(g => ({ label: g, a: div(gTot.get(g).t, gTot.get(g).l) || 0 })), { pct: true, benchA: BENCH.lt, labelA: `${pct0(BENCH.lt)} benchmark`, aria: "Lead to tour by source group", click: true }]]
+        .forEach(([cid, rid, rows, opts]) => {
+          const svg = chartBars($(cid), rows, opts, animate), ro = $(rid), idle = "Hover a group for its funnel.";
+          ro.textContent = idle;
+          wireRows(svg, rows.length, i => { ro.classList.toggle("is-on", i >= 0); ro.textContent = i < 0 ? idle : detail(gl[i]); }, { onPick: off });
+        });
+    }
+    badge("lsSourceChartsCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+
+    /* detail */
+    const opts = cur => groups.map(g => `<option value="${esc(g)}"${g === cur ? " selected" : ""}>${esc(g)}</option>`).join("");
+    const sRows = sources.map((s, i) => ({ s, o: bySrc.get(i) || zero() })).filter(x => x.o.l > 0 || prefs.srcOff[x.s.name]).sort((a, b) => b.o.l - a.o.l).map(({ s, o }) => {
+      const r = rates(o), lo = lowOf(o), isOn = srcOn(s);
+      return `<tr><td class="excel-row-label ${isOn ? "" : "excel-muted"}">${esc(s.name)}</td>
+        <td class="excel-number"><select class="am-sort" data-ls-regroup="${esc(s.name)}" aria-label="Group for ${esc(s.name)}">${opts(groupOf(s))}</select></td>
+        <td class="excel-number">${onOff("source", s.name, !prefs.srcOff[s.name])}</td>${numCell(o.l)}<td class="excel-number">${isOn ? pct1(div(o.l, on.l)) : "Off"}</td>
+        ${numCell(o.t)}${rateCell(r.lt, BENCH.lt, lo.lt)}${numCell(o.a)}${numCell(o.x)}${rateCell(r.ll, BENCH.ll, lo.ll)}</tr>`;
+    }).join("");
+    const nOff = Object.keys(prefs.srcOff).length, nGrpOff = Object.keys(prefs.grpOff).length, nMoved = Object.keys(prefs.regroup).length;
+    fillFrozen("lsSourceDetailCard",
+      `<div class="am-pw-toolbar">
+        <div class="am-pw-summary"><strong>${sources.filter((s, i) => (bySrc.get(i) || zero()).l > 0).length} sources</strong> · ${nOff} turned off · ${nGrpOff} group${nGrpOff === 1 ? "" : "s"} off · ${nMoved} moved to another group</div>
+        <div class="am-pw-actions"><button class="am-btn am-btn-ghost" data-ls-reset ${nOff + nGrpOff + nMoved ? "" : "disabled"}>Restore Defaults</button></div>
+      </div>`,
+      `<thead><tr><th>Lead Source</th><th>Group</th><th>Included</th><th>Leads</th><th>Share</th><th>Tours</th><th>Lead to Tour</th><th>Apps</th><th>Leases</th><th>Lead to Lease</th></tr></thead><tbody>${sRows}</tbody>`,
+      `Groups follow the Lead Summary report's mapping. A source whose group is off stays out even when the source itself is on.`);
+    badge("lsSourceDetailCardBadge", isLive ? `As of ${mdy(weekEnds[WEEKS - 1])}` : SAMPLE_BADGE, !isLive);
+  }
+
+  /* ---------- page shell ---------- */
+  let root = null;
+  /* Frozen cards keep a permanent table container, as on the property pages, so the
+     frozen header, the scroll router and the horizontal bar stay attached and a
+     re-render keeps the reader's scroll position. */
+  function fillFrozen(id, top, tableHtml, foot) {
+    const t = $(id + "Top"), tb = $(id + "Table"), f = $(id + "Foot");
+    if (t) { t.innerHTML = top; t.hidden = !top; }
+    if (tb) tb.innerHTML = tableHtml;
+    if (f) { f.innerHTML = foot || ""; f.hidden = !foot; }
+  }
+  const card = (id, title, inner) => `<div class="financial-section excel-card span-two${FREEZE.includes(id) ? " am-freeze-card" : ""}" id="${id}">
+      <div class="excel-card-header"><h4 class="excel-card-title" style="margin:0;">${title}</h4><div class="excel-card-badge" id="${id}Badge" style="display:none;"></div></div>
+      ${inner || (FREEZE.includes(id)
+        ? `<div id="${id}Body"><div class="am-card-slot-top" id="${id}Top" hidden></div><div class="excel-table-wrap am-freeze-wrap" id="${id}TableWrap"><table class="excel-table" id="${id}Table" aria-label="${esc(title)}"></table></div><div class="am-footnote" id="${id}Foot" hidden></div></div>`
+        : `<div id="${id}Body"></div>`)}
+    </div>`;
+
+  function mount() {
+    if (root) return;
+    root = document.createElement("div");
+    root.id = "leadSummaryContent";
+    root.style.display = "none";
+    root.innerHTML = `
+      <div class="ps-project-header"><h2>Lead Summary</h2><h3>Conversion, Communities, Agents, &amp; Sources</h3></div>
+      <div class="main-grid is-portfolio">
+        ${card("lsConversionCard", "Lead Conversion")}
+        <hr class="home-divider">
+        ${card("lsCommunitiesCard", "Communities")}
+        <hr class="home-divider">
+        ${card("lsByCommunityCard", "Lead to Tour &amp; Lead to Lease by Community",
+               `<div id="lsByCommunityCardBody"><div class="am-chart-bar" style="margin-top:0;"><div class="am-legend" id="lsByCommunityLegend"></div>
+                <div class="am-range" role="group" aria-label="Sort the chart" id="lsByCommunitySort"></div></div>
+                <div class="am-chart-wrap" id="lsByCommunityChart"></div><div class="ls-readout" id="lsByCommunityReadout"></div></div>`)}
+        <hr class="home-divider">
+        ${card("lsAgentsCard", "Agent Scorecard")}
+        <hr class="home-divider">
+        ${card("lsStaffCard", "Leasing Staff Ranked by Lead to Tour")}
+        <hr class="home-divider">
+        ${card("lsSourcesCard", "Lead Sources")}
+        <hr class="home-divider">
+        ${card("lsSourceChartsCard", "Leads &amp; Lead to Tour by Source Group")}
+        <hr class="home-divider">
+        ${card("lsSourceDetailCard", "Lead Sources Detail")}
+      </div>`;
+    const dir = $("assetDirectoryContent"), pc = $("projectContent");
+    const anchor = dir || pc;
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(root, anchor.nextSibling); else document.body.appendChild(root);
+
+    const st = $("stateSelector");
+    if (st && ![...st.options].some(o => o.value === "leadsummary")) {
+      const opt = new Option("Lead Summary", "leadsummary");
+      const after = [...st.options].find(o => o.value === "amdashboard");
+      st.insertBefore(opt, after ? after.nextSibling : null);
+    }
+
+    root.addEventListener("click", e => {
+      const t = e.target.closest("[data-f],[data-ls-sort],[data-ls-toggle],[data-ls-reset],[data-trend-weeks],[data-chart-sort],.am-tile-toggle"); if (!t || !root.contains(t)) return;
+      if (t.dataset.f) {
+        if (t.dataset.f === "weeks") { prefs.weeks = +t.dataset.v; savePrefs(); }
+        else { F[t.dataset.f] = t.dataset.v; if (comm !== "all") setComm("all", true); }
+        render(true);
+      } else if (t.dataset.lsSort !== undefined) {
+        const c = +t.dataset.lsSort;
+        commState.sortDir = (c === commState.sortCol && commState.sortDir === "asc") ? "desc" : "asc";
+        commState.sortCol = c;
+        renderCommunities(false);
+      } else if (t.dataset.lsToggle) {
+        const bag = t.dataset.lsToggle === "group" ? prefs.grpOff : prefs.srcOff, n = t.dataset.name;
+        if (t.dataset.on === "1") delete bag[n]; else bag[n] = 1;
+        savePrefs(); render(true);
+      } else if (t.hasAttribute("data-ls-reset")) {
+        prefs.srcOff = {}; prefs.grpOff = {}; prefs.regroup = {}; savePrefs(); render(true);
+      } else if (t.dataset.trendWeeks) {
+        trendView.weeks = +t.dataset.trendWeeks;
+        root.querySelectorAll("[data-trend-weeks]").forEach(b => b.classList.toggle("on", b === t));
+        drawTrend(true);
+      } else if (t.dataset.chartSort) {
+        chartSort.by = t.dataset.chartSort; drawByCommunity(true);
+      } else if (t.classList.contains("am-tile-toggle")) {
+        const k = t.dataset.series, next = !trendView.series[k];
+        if (!next && Object.values(trendView.series).filter(Boolean).length === 1) return;   // keep at least one line
+        trendView.series[k] = next;
+        t.classList.toggle("on", next); t.setAttribute("aria-pressed", next);
+        t.title = `${next ? "Hide" : "Show"} ${STAGE[k].label.toLowerCase()} on the weekly chart`;
+        drawTrend(true);
+      }
+    });
+    root.addEventListener("change", e => {
+      const s = e.target.closest("[data-ls-regroup]"); if (!s) return;
+      const name = s.dataset.lsRegroup, src = sources.find(x => x.name === name);
+      if (src && s.value === src.group) delete prefs.regroup[name]; else prefs.regroup[name] = s.value;
+      savePrefs(); render(true);
+    });
+    let rt = null, lastW = 0;
+    window.addEventListener("resize", () => {
+      if (!isOpen()) return;
+      clampCards();
+      clearTimeout(rt);
+      rt = setTimeout(() => { const w = root.clientWidth; if (Math.abs(w - lastW) > 2) { lastW = w; render(false); } }, 160);
+    });
+    lastW = root.clientWidth;
+    initScrolling();
+  }
+
+  function render(animate) {
+    if (!isOpen()) return;
+    inScope = new Set(scopeKeys());
+    renderConversion(animate); renderCommunities(animate); renderAgents(animate); renderSources(animate);
+    if (typeof updateExcelScrollbarPadding === "function") try { updateExcelScrollbarPadding(root); } catch (e) {}
+    syncBars();
+  }
+
+  /* ============================================================
+     FROZEN TABLES — the dashboard's scroll router, for this page.
+     The page scrolls until a table card reaches the section bar,
+     then the table scrolls (header frozen), then the page goes on.
+     Touch gets momentum. Same rules as the cover and directory.
+     ============================================================ */
+  function stickyTop() {
+    const base = window.matchMedia("(max-width: 900px)").matches ? 8 : 16;
+    const bar = $("amSubnav");
+    return base + (bar && !bar.hidden && bar.offsetParent !== null ? bar.getBoundingClientRect().height : 0);
+  }
+  const frozen = () => FREEZE.map(id => ({ card: $(id), box: $(id + "TableWrap"), table: $(id + "Table") })).filter(t => t.card && t.box);
+  /* Grid items default to min-height:auto, which beats max-height; pin it inline */
+  function clampCards() {
+    const pad = stickyTop() * 2;
+    frozen().forEach(({ card: el }) => {
+      el.style.minHeight = "0"; el.style.boxSizing = "border-box"; el.style.overflow = "hidden";
+      el.style.maxHeight = `calc(100vh - ${pad}px)`; el.style.maxHeight = `calc(100dvh - ${pad}px)`;
+    });
+  }
+  function ctx() {
+    if (!isOpen()) return null;
+    const TOP = stickyTop();
+    let best = null, bestTop = null;
+    for (const t of frozen()) {
+      if (t.card.offsetParent === null) continue;
+      if (t.box.scrollHeight - t.box.clientHeight <= 1) continue;
+      const r = t.card.getBoundingClientRect();
+      if (r.bottom <= TOP) continue;
+      if (bestTop === null || r.top < bestTop) { bestTop = r.top; best = t; }
+    }
+    return best;
+  }
+  function applyDelta(dy, t) {
+    const TOP = stickyTop();
+    let remaining = dy, used = 0;
+    if (remaining > 0) {
+      const gap = t.card.getBoundingClientRect().top - TOP;
+      if (gap > 0) { const step = Math.min(remaining, gap); window.scrollBy(0, step); remaining -= step; used += step; }
+      if (remaining > 0) {
+        const room = t.box.scrollHeight - t.box.clientHeight - t.box.scrollTop;
+        if (room > 0) { const step = Math.min(remaining, room); t.box.scrollTop += step; remaining -= step; used += step; }
+      }
+      if (remaining > 0) { const before = window.scrollY; window.scrollBy(0, remaining); used += (window.scrollY - before); }
+    } else if (remaining < 0) {
+      const gapUp = TOP - t.card.getBoundingClientRect().top;
+      if (gapUp > 0) { const step = Math.max(remaining, -gapUp); window.scrollBy(0, step); remaining -= step; used += step; }
+      if (remaining < 0) {
+        const room = t.box.scrollTop;
+        if (room > 0) { const step = Math.max(remaining, -room); t.box.scrollTop += step; remaining -= step; used += step; }
+      }
+      if (remaining < 0) { const before = window.scrollY; window.scrollBy(0, remaining); used += (window.scrollY - before); }
+    }
+    return used;
+  }
+  const ownsItsScroll = target => !!(target && target.closest && target.closest(".eg-custom-menu-layer, header select"));
+
+  /* Proxy horizontal scrollbar under each frozen table (desktop) */
+  const barSyncs = [];
+  const syncBars = () => barSyncs.forEach(f => f());
+  function buildBar(t) {
+    if (window.matchMedia("(hover: none) and (pointer: coarse)").matches) return;
+    const { card: c, box, table } = t;
+    if (c.querySelector(":scope > .ps-xbar")) return;
+    const bar = document.createElement("div"); bar.className = "ps-xbar";
+    const thumb = document.createElement("div"); thumb.className = "ps-xbar-thumb";
+    bar.appendChild(thumb); c.appendChild(bar);
+    const sync = () => {
+      const max = box.scrollWidth - box.clientWidth;
+      if (max <= 1) { bar.classList.remove("is-active"); return; }
+      bar.classList.add("is-active");
+      const track = bar.clientWidth; if (track <= 0) return;
+      const w = Math.max(40, track * (box.clientWidth / box.scrollWidth));
+      thumb.style.width = w + "px";
+      thumb.style.transform = "translateX(" + ((box.scrollLeft / max) * (track - w)) + "px)";
+    };
+    barSyncs.push(sync);
+    box.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync);
+    if ("ResizeObserver" in window) { if (table) new ResizeObserver(sync).observe(table); new ResizeObserver(sync).observe(box); }
+    let dragging = false, grabX = 0, grabLeft = 0;
+    thumb.addEventListener("pointerdown", e => { dragging = true; grabX = e.clientX; grabLeft = box.scrollLeft; thumb.setPointerCapture(e.pointerId); e.preventDefault(); e.stopPropagation(); });
+    thumb.addEventListener("pointermove", e => {
+      if (!dragging) return;
+      const max = box.scrollWidth - box.clientWidth, travel = bar.clientWidth - thumb.offsetWidth;
+      if (travel > 0) box.scrollLeft = grabLeft + ((e.clientX - grabX) / travel) * max;
+    });
+    const release = e => { if (!dragging) return; dragging = false; try { thumb.releasePointerCapture(e.pointerId); } catch (err) {} };
+    thumb.addEventListener("pointerup", release); thumb.addEventListener("pointercancel", release);
+    bar.addEventListener("pointerdown", e => {
+      if (e.target === thumb) return;
+      const rect = bar.getBoundingClientRect();
+      box.scrollLeft = ((e.clientX - rect.left) / rect.width) * (box.scrollWidth - box.clientWidth);
+    });
+    sync();
+  }
+
+  function initScrolling() {
+    frozen().forEach(buildBar);
+    window.addEventListener("wheel", e => {
+      if (ownsItsScroll(e.target)) return;
+      const t = ctx(); if (!t) return;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 16; else if (e.deltaMode === 2) dy *= t.box.clientHeight;
+      e.preventDefault();
+      applyDelta(dy, t);
+    }, { passive: false });
+
+    let tracking = false, axis = null, startX = 0, lastY = 0, lastT = 0, vel = 0, raf = null, pending = 0, tc = null;
+    const stopGlide = () => { if (raf) cancelAnimationFrame(raf); raf = null; pending = 0; vel = 0; };
+    const flush = () => { raf = null; if (!tc || !pending) return; const dy = pending; pending = 0; applyDelta(dy, tc); };
+    const glide = () => {
+      if (!tc) { raf = null; return; }
+      vel *= 0.94;
+      if (Math.abs(vel) < 0.4) { raf = null; return; }
+      if (Math.abs(applyDelta(vel, tc)) < 0.5) { raf = null; return; }
+      raf = requestAnimationFrame(glide);
+    };
+    document.addEventListener("touchstart", e => {
+      stopGlide(); tracking = false; axis = null; tc = null;
+      if (e.touches.length !== 1 || e.target.closest(".am-chart-live")) return;   // charts keep their own touch scrubbing
+      tc = ctx(); if (!tc) return;
+      startX = e.touches[0].clientX; lastY = e.touches[0].clientY; lastT = performance.now(); tracking = true;
+    }, { passive: true });
+    document.addEventListener("touchmove", e => {
+      if (!tracking) return;
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      if (axis === null) {
+        const ax = Math.abs(x - startX), ay = Math.abs(y - lastY);
+        if (ax < 4 && ay < 4) return;
+        axis = ax > ay ? "x" : "y";
+        if (axis === "x") { tracking = false; tc = null; return; }
+      }
+      const dy = lastY - y, now = performance.now(), dt = Math.max(1, now - lastT);
+      vel = Math.max(-60, Math.min(60, dy * (16 / dt)));
+      lastY = y; lastT = now;
+      e.preventDefault();
+      pending += dy;
+      if (!raf) raf = requestAnimationFrame(flush);
+    }, { passive: false });
+    const endTouch = () => {
+      const fling = tracking && axis === "y" && Math.abs(vel) > 1 && tc;
+      if (raf) { cancelAnimationFrame(raf); raf = null; }
+      pending = 0; tracking = false; axis = null;
+      if (fling) raf = requestAnimationFrame(glide); else tc = null;
+    };
+    document.addEventListener("touchend", endTouch, { passive: true });
+    document.addEventListener("touchcancel", endTouch, { passive: true });
+  }
+
+  function scrollToCard(el) {
+    const bar = $("amSubnav"), h = bar && !bar.hidden ? bar.getBoundingClientRect().height : 0;
+    window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - h - 14), behavior: REDUCED() ? "auto" : "smooth" });
+  }
+
+  /* Section bar: the dashboard's own bar, filled with this page's cards */
+  function buildSubnav() {
+    const bar = $("amSubnav"), inner = $("amSubnavInner"), title = $("amSubnavTitle");
+    if (!bar || !inner) return;
+    bar.hidden = false;
+    if (title) title.textContent = "Lead Summary";
+    inner.innerHTML = SECTIONS.map(([label, id], i) => `<a href="#${id}" class="am-subnav-link${i === 0 ? " on" : ""}" data-target="${id}">${esc(label)}</a>`).join("");
+    inner.scrollLeft = 0;
+    window.dispatchEvent(new Event("resize"));
+  }
+
+  /* ---------- page switching: steps aside whenever the dashboard shows another page ---------- */
+  let observer = null;
+  const isOpen = () => !!root && root.style.display !== "none";
+  function setComm(k, silent) {
+    comm = k && k !== "tgcportfolio" && projects[k] ? k : "all";
+    const sel = $("projectSelector"); if (sel) sel.value = comm === "all" ? "tgcportfolio" : comm;
+    if (!silent) render(true);
+  }
+  async function open() {
+    mount();
+    if (!loaded) { loaded = true; if (!(await loadLive())) buildSample(); }
+    if (observer) observer.disconnect();
+    const pc = $("projectContent"), dir = $("assetDirectoryContent");
+    if (pc) pc.style.display = "none";
+    if (dir) dir.style.display = "none";
+    root.style.display = "block";
+    root.style.animation = "none"; void root.offsetHeight; root.style.animation = "";
+    frozen().forEach(t => { t.box.scrollTop = 0; });
+    if (typeof amScrollTop === "function") amScrollTop(); else window.scrollTo(0, 0);
+    if (typeof populateProjectDropdown === "function") populateProjectDropdown();
+    const st = $("stateSelector"); if (st) st.value = "leadsummary";
+    setComm(comm, true);
+    buildSubnav();
+    clampCards();
+    render(true);
+    observer = new MutationObserver(() => {
+      if ([pc, dir].some(el => el && getComputedStyle(el).display !== "none")) close();
+    });
+    [pc, dir].forEach(el => el && observer.observe(el, { attributes: true, attributeFilter: ["style", "class", "hidden"] }));
+  }
+  function close() {
+    if (observer) { observer.disconnect(); observer = null; }
+    if (root) root.style.display = "none";
+  }
+
+  /* Runs ahead of the dashboard's own dropdown handlers */
+  document.addEventListener("change", e => {
+    const t = e.target; if (!t || !t.id) return;
+    if (t.id === "stateSelector" && t.value === "leadsummary") { e.stopPropagation(); open(); }
+    else if (t.id === "projectSelector" && isOpen()) { e.stopPropagation(); setComm(t.value); }
+  }, true);
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount); else mount();
+  return { open, close, render, setComm };
+})();
+</script>
+<!-- ===== END LEAD SUMMARY PAGE ===== -->
+
 </body>
 </html>

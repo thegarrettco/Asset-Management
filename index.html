@@ -1779,7 +1779,23 @@ hr.home-divider {
 @media (max-width: 900px) {
   /* native page scrolling: tables at full height, no inner vertical scroll */
   .am-freeze-card { max-height: none !important; overflow: visible !important; }
-  .am-freeze-wrap { overflow-y: visible !important; flex: none !important; }
+  .am-freeze-wrap { overflow-y: visible !important; flex: none !important;
+                    touch-action: auto !important; -webkit-overflow-scrolling: touch !important; }
+  /* the in-table sticky header does nothing here (the pinned copy replaces it) */
+  .am-freeze-wrap .excel-table thead th { position: static; }
+  .am-freeze-wrap .excel-table thead th:first-child { position: sticky; left: 0; }
+  /* no hover lift on phones: a tap leaves :hover stuck, and a shifted card is
+     a known source of vanishing content in mobile Safari */
+  .investment-highlights:hover, .property-details:hover, .financial-section:hover,
+  .rendering-section:hover, .map-section:hover { transform: none !important; }
+
+  /* pinned copy of a table header, under the section bar */
+  .am-float-head { position: fixed; z-index: 790; overflow: hidden; pointer-events: auto;
+                   box-shadow: 0 1px 0 rgba(51, 62, 78, 0.12), 0 3px 6px -4px rgba(30, 45, 62, 0.3); }
+  .am-float-head[hidden] { display: none; }
+  .am-float-head .excel-table { margin: 0; }
+  .am-float-head .excel-table thead th { background: #edf5fa; white-space: nowrap !important; position: relative; }
+  .am-float-head .excel-table thead th:first-child { z-index: 2; border-top-left-radius: 0; }
   .excel-card > [id$="Body"], .excel-card > .am-card-body { min-height: auto; }
   .am-subnav { -webkit-backdrop-filter: none; backdrop-filter: none; background: #fff; }
 
@@ -5137,6 +5153,103 @@ const AM_SUBNAV = (() => {
 
 window.addEventListener("resize", () => { const a = document.querySelector("#amSubnavInner .am-subnav-link.on"); if (a) window.dispatchEvent(new Event("scroll")); });
 
+/* ============================================================
+   PHONES: pinned table header with native page scrolling.
+   A header row cannot stick to the screen while its table also
+   scrolls sideways (the table's own scroll box captures it), so
+   when a table's header passes under the section bar, an exact
+   copy pins there: same column widths, follows sideways scrolling
+   with the first column frozen, pushed off when the table ends,
+   and taps on it act on the real header (e.g. sorting).
+   ============================================================ */
+const AM_PHONE_HEAD = (() => {
+  const mq = window.matchMedia("(max-width: 900px)");
+  let box = null, active = null, sourceHead = null, raf = null, headH = 0;
+
+  function ensureBox() {
+    if (box) return box;
+    box = document.createElement("div");
+    box.className = "am-float-head";
+    box.setAttribute("aria-hidden", "true");
+    box.hidden = true;
+    document.body.appendChild(box);
+    box.addEventListener("click", e => {
+      const th = e.target.closest("th[data-i]"); if (!th || !active) return;
+      const real = active.table.tHead?.rows[0]?.cells[+th.dataset.i];
+      if (real) { real.click(); requestAnimationFrame(() => { sourceHead = null; update(); }); }
+    });
+    return box;
+  }
+  const barBottom = () => { const b = document.getElementById("amSubnav"); return b && !b.hidden && b.offsetParent !== null ? b.getBoundingClientRect().bottom : 0; };
+
+  function build(entry) {
+    const b = ensureBox(), t = entry.table, head = t.tHead;
+    const clone = document.createElement("table");
+    clone.className = t.className;
+    const h = head.cloneNode(true);
+    h.querySelectorAll("[id]").forEach(n => n.removeAttribute("id"));
+    const srcCells = [...head.rows[0].cells], cells = [...h.rows[0].cells];
+    /* same border model and spacing as the real table, and the real column
+       widths, so every column of the copy sits exactly over its column */
+    const cs = getComputedStyle(t);
+    clone.style.borderCollapse = cs.borderCollapse;
+    clone.style.borderSpacing = cs.borderSpacing;
+    const cg = document.createElement("colgroup");
+    srcCells.forEach(c => { const col = document.createElement("col"); col.style.width = `${c.getBoundingClientRect().width}px`; cg.appendChild(col); });
+    clone.appendChild(cg);
+    cells.forEach((c, i) => { c.dataset.i = i; c.style.boxSizing = "border-box"; });
+    clone.appendChild(h);
+    clone.style.width = `${t.getBoundingClientRect().width}px`;
+    clone.style.minWidth = "0";
+    clone.style.tableLayout = "fixed";
+    b.innerHTML = ""; b.appendChild(clone);
+    sourceHead = head;
+    headH = head.getBoundingClientRect().height;
+  }
+
+  function sync() {
+    if (!active || box.hidden) return;
+    const w = active.wrap, r = w.getBoundingClientRect(), x = w.scrollLeft;
+    box.style.left = `${r.left}px`; box.style.width = `${w.clientWidth}px`;
+    const clone = box.firstElementChild; if (!clone) return;
+    clone.style.transform = `translateX(${-x}px)`;
+    const first = clone.tHead?.rows[0]?.cells[0];
+    /* first column stays frozen, exactly as the real sticky column does: it
+       pins to the scroll edge, over the table's own left border */
+    const bl = parseFloat(getComputedStyle(active.table).borderLeftWidth) || 0;
+    if (first) first.style.transform = `translateX(${Math.max(0, x - bl)}px)`;
+  }
+
+  function update() {
+    raf = null;
+    if (!mq.matches) { if (box) box.hidden = true; active = null; return; }
+    const top = barBottom();
+    let found = null;
+    document.querySelectorAll(".am-freeze-wrap > table").forEach(t => {
+      if (found || !t.tHead || !t.tHead.rows.length || t.offsetParent === null) return;
+      const head = t.tHead.getBoundingClientRect(), tr = t.getBoundingClientRect();
+      if (head.top < top && tr.bottom > top + head.height) found = { table: t, wrap: t.parentElement };
+    });
+    if (!found) { if (box) box.hidden = true; active = null; return; }
+    ensureBox();
+    if (!active || active.table !== found.table || sourceHead !== found.table.tHead) {
+      if (active) active.wrap.removeEventListener("scroll", sync);
+      active = found; build(found);
+      found.wrap.addEventListener("scroll", sync, { passive: true });
+    }
+    box.hidden = false;
+    const tr = found.table.getBoundingClientRect();
+    const push = Math.min(0, tr.bottom - (top + headH));                // slides off as the table ends
+    box.style.top = `${top + push}px`;
+    sync();
+  }
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(update); };
+  window.addEventListener("scroll", schedule, { passive: true });
+  window.addEventListener("resize", () => { sourceHead = null; schedule(); });
+  mq.addEventListener ? mq.addEventListener("change", () => { sourceHead = null; schedule(); }) : mq.addListener(() => { sourceHead = null; schedule(); });
+  return { refresh: () => { sourceHead = null; schedule(); } };
+})();
+
 const stateSelector = document.getElementById("stateSelector");
 const selector      = document.getElementById("projectSelector");
 const content       = document.getElementById("projectContent");
@@ -7460,7 +7573,7 @@ egInitAuth();
     e.preventDefault();
     pending += dy;
     if (!raf) raf = requestAnimationFrame(flush);
-  }, { passive: false });
+  }, { passive: isPhone() });   /* phones: never make the browser wait on this handler */
 
   function endTouch() {
     const fling = tracking && axis === "y" && Math.abs(vel) > 1 && tc;

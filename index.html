@@ -1670,9 +1670,9 @@ hr.home-divider {
 .am-subnav-link:hover, .am-subnav-link.on { color: var(--secondary); }
 .am-subnav-link:focus-visible { outline: 2px solid var(--primary); outline-offset: -6px; border-radius: 6px; }
 .am-subnav-ink {
-  position: absolute; left: 0; bottom: 0; height: 2px; width: 0;
-  background: var(--primary); border-radius: 2px 2px 0 0; pointer-events: none;
-  transition: transform 0.28s cubic-bezier(.2,.7,.2,1), width 0.28s cubic-bezier(.2,.7,.2,1);
+  position: absolute; left: 0; top: 0; height: 2px; width: 0;
+  background: var(--primary); pointer-events: none;
+  transition: left 0.28s cubic-bezier(.2,.7,.2,1), width 0.28s cubic-bezier(.2,.7,.2,1);
 }
 .am-debt-strip { margin-bottom: 1rem; }
 @media (max-width: 900px) {
@@ -1752,6 +1752,22 @@ hr.home-divider {
   #amStatusBody .am-tile-delta .am-d { display: block; }
   #amStatusBody .am-tile-delta .am-dsep { display: none; }
 }
+
+/* Price ladder: bedroom counts are the filter */
+.am-tierchip, .am-tierall {
+  font: inherit; font-size: 0.78rem; display: inline-flex; align-items: center; gap: 0.4rem;
+  border: 0; border-radius: 999px; padding: 0.22rem 0.6rem 0.22rem 0.5rem; cursor: pointer;
+  background: #f1f4f7; color: var(--secondary); transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.am-tierchip:hover { background: #e6edf4; }
+.am-tierchip:not(.on) { color: #9aa3ae; background: transparent; box-shadow: inset 0 0 0 1px var(--am-line); }
+.am-tierchip:not(.on) .am-dot { opacity: 0.35; }
+.am-tierall { background: transparent; color: var(--primary); font-weight: 600; padding-left: 0.4rem; }
+.am-tierall:hover { text-decoration: underline; text-underline-offset: 3px; }
+.am-tierchip:focus:not(:focus-visible), .am-tierall:focus:not(:focus-visible) { outline: none; }
+.am-tierchip:focus-visible, .am-tierall:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.am-legend-static { margin-left: 0.35rem; }
 </style>
 </head>
 
@@ -4162,9 +4178,11 @@ const AM_CHARTS = (() => {
   }
 
   /* Price ladder: current rent vs size, stem to the decided (or proposed) rate */
-  function ladder(T, key, H = 300, width = 560) {
-    const rows = T.rows.filter(r => r.sqft && r.rent);
-    if (!rows.length) return "";
+  function ladder(T, key, H = 300, width = 560, focus = null) {
+    const all = T.rows.filter(r => r.sqft && r.rent);
+    if (!all.length) return "";
+    const tiersAll = [...new Set(all.map(r => r.tier))];
+    const rows = focus && focus.size ? all.filter(r => focus.has(r.tier)) : all;
     const W = Math.max(320, Math.round(width)), L = 58, Rt = 18, Tp = 16, B = 40;
     const dec = r => { const d = AM_DECISIONS.get(key, r); return d.status === "held" ? r.rent : d.rent; };
     const sq = rows.map(r => r.sqft), rents = rows.flatMap(r => [r.rent, dec(r)]);
@@ -4200,9 +4218,15 @@ const AM_CHARTS = (() => {
       if (Math.abs(ly - (y(r.rent) + 4)) > 1) g += `<line x1="${x(r.sqft) + 5}" y1="${y(r.rent) + 2}" x2="${x(r.sqft) + 9}" y2="${ly - 4}" stroke="${C.text}" stroke-width="0.75"/>`;
       g += `<text x="${x(r.sqft) + 11}" y="${ly}" font-size="11" font-weight="600" fill="${C.occ}">${AMT.esc(r.fp)}</text>`;
     });
-    const tiers = [...new Set(rows.map(r => r.tier))];
-    const legend = tiers.map(t => `<span class="am-legend-item"><span class="am-dot" style="background:${tierColor[t] || C.occ}"></span>${AMT.esc(AMT.tierLabel(t))}</span>`).join("")
-      + `<span class="am-legend-item"><span class="am-dot am-dot-hollow"></span>New rate</span>`;
+    /* Bedroom counts double as the filter: click one to focus on it, click
+       more to compare, click a selected one to drop it. */
+    const filtered = rows.length !== all.length;
+    const legend = tiersAll.map(t => {
+        const on = !filtered || focus.has(t);
+        return `<button type="button" class="am-tierchip${on ? " on" : ""}" data-tier="${AMT.esc(t)}" aria-pressed="${on && filtered}" title="${filtered && on ? "Remove" : "Focus on"} ${AMT.esc(AMT.tierLabel(t))}"><span class="am-dot" style="background:${tierColor[t] || C.occ}"></span>${AMT.esc(AMT.tierLabel(t))}</button>`;
+      }).join("")
+      + (filtered ? `<button type="button" class="am-tierall" data-tier="__all">Show all</button>` : "")
+      + `<span class="am-legend-item am-legend-static"><span class="am-dot am-dot-hollow"></span>New rate</span>`;
     return `<div class="am-legend">${legend}</div><svg class="am-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rent by unit size">${g}</svg>`;
   }
 
@@ -4537,7 +4561,8 @@ const AM_TRACKER_UI = (() => {
   function renderLadder(key) {
     const T = get(key), el = $("priceLadderBody"); if (!el || !T) return;
     const width = el.clientWidth || 560;
-    const draw = H => { el.innerHTML = AM_CHARTS.ladder(T, key, H, width) + `<div class="am-footnote"><p>Dots are today's rent. A hollow dot on a dashed stem is the decided rate, or the model's proposal while pending.</p></div>`; };
+    const focus = ladderFocus.get(key) || null;
+    const draw = H => { el.innerHTML = AM_CHARTS.ladder(T, key, H, width, focus) + `<div class="am-footnote"><p>Dots are today's rent. A hollow dot on a dashed stem is the decided rate, or the model's proposal while pending. Click a bedroom count to focus the ladder on it; click another to compare.</p></div>`; };
     draw(300);
     const card = $("priceLadderCard"), peer = $("askingHistoryCard"), svg = el.querySelector("svg");
     if (card && peer && svg && window.matchMedia("(min-width: 901px)").matches) {
@@ -4549,6 +4574,23 @@ const AM_TRACKER_UI = (() => {
     badge("priceLadderBadge", AMT.BADGE);
   }
   let __ladderKey = null, __ladderTimer = null;
+  const ladderFocus = new Map();                       // property key → Set of tiers in focus
+  document.addEventListener("click", e => {
+    const chip = e.target.closest("#priceLadderBody [data-tier]"); if (!chip || !__ladderKey) return;
+    const T = get(__ladderKey); if (!T) return;
+    const tiers = [...new Set(T.rows.filter(r => r.sqft && r.rent).map(r => r.tier))];
+    let f = ladderFocus.get(__ladderKey);
+    const t = chip.dataset.tier;
+    if (t === "__all") f = null;
+    else if (!f) f = new Set([t]);                      // from "all": focus on the one clicked
+    else {
+      f = new Set(f);
+      f.has(t) ? f.delete(t) : f.add(t);
+      if (!f.size || f.size === tiers.length) f = null; // nothing or everything selected → show all
+    }
+    f ? ladderFocus.set(__ladderKey, f) : ladderFocus.delete(__ladderKey);
+    renderLadder(__ladderKey);
+  });
   window.addEventListener("resize", () => {
     clearTimeout(__ladderTimer);
     __ladderTimer = setTimeout(() => { if (__ladderKey && $("priceLadderCard")?.offsetParent) renderLadder(__ladderKey); }, 150);
@@ -4952,11 +4994,24 @@ const AM_SUBNAV = (() => {
     inner.classList.toggle("fade-l", inner.scrollLeft > 4);
     inner.classList.toggle("fade-r", inner.scrollLeft + inner.clientWidth < inner.scrollWidth - 4);
   }
+  /* The underline sits on whole screen pixels at any browser zoom. At 90%
+     a CSS pixel is 0.9 of a screen pixel, so a 2px line placed by transform
+     straddled three pixel rows and looked smeared. Snap edges to the device
+     grid and choose a thickness that is a whole number of screen pixels. */
   function placeInk(active) {
     const ink = document.querySelector("#amSubnavInner .am-subnav-ink"); if (!ink || !active) return;
+    const inner = ink.parentElement, dpr = window.devicePixelRatio || 1;
+    const snap = v => Math.round(v * dpr) / dpr;
     const pad = parseFloat(getComputedStyle(active).paddingLeft) || 0;
-    ink.style.width = `${Math.max(0, active.offsetWidth - pad * 2)}px`;
-    ink.style.transform = `translateX(${active.offsetLeft + pad}px)`;
+    const ir = inner.getBoundingClientRect(), ar = active.getBoundingClientRect();
+    const h = Math.max(2, Math.round(2 * dpr)) / dpr;                    // 2 screen px at 80–100%
+    const left = snap(ar.left + pad) - ir.left + inner.scrollLeft;
+    const width = snap(ar.right - pad) - snap(ar.left + pad);
+    const top = Math.floor(ir.bottom * dpr) / dpr - h - ir.top;
+    ink.style.height = `${h}px`;
+    ink.style.width = `${Math.max(0, width)}px`;
+    ink.style.left = `${left}px`;
+    ink.style.top = `${top}px`;
   }
   function spy() {
     raf = null;

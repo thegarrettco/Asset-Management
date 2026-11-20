@@ -4074,7 +4074,11 @@ const AM_CHARTS = (() => {
   function trend(T, opts = {}) {
     const t = T.trend, weeks = opts.weeks || 53, on = opts.series || { leased: true, occ: true };
     const n = Math.min(weeks, t.dates.length), s = t.dates.length - n;
-    const dates = t.dates.slice(s), W = 860, L = 44, Rt = 16, Tp = 14, chartH = 190, barTop = Tp + chartH + 26, barH = 48;
+    /* Drawn at the card's real width (1 unit = 1 px), so labels stay 11px at
+       any screen size; only the plot widens. Height grows gently with width. */
+    const W = Math.max(480, Math.round(opts.width || 860));
+    const chartH = Math.round(Math.min(250, Math.max(190, W * 0.17)));
+    const dates = t.dates.slice(s), L = 44, Rt = 16, Tp = 14, barTop = Tp + chartH + 26, barH = 48;
     const x = i => L + (i * (W - L - Rt)) / Math.max(1, n - 1);
     const shown = Object.keys(SERIES).filter(k => on[k]);
     const seen = shown.flatMap(k => t[SERIES[k].key].slice(s)).filter(v => v !== null && v !== undefined)
@@ -4104,7 +4108,7 @@ const AM_CHARTS = (() => {
         lastMonth = m;
         const lbl = new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", year: i === 0 || m.endsWith("-01") ? "2-digit" : undefined });
         g += `<line x1="${x(i)}" x2="${x(i)}" y1="${Tp}" y2="${Tp + chartH}" stroke="${C.grid}"/>`;
-        g += `<text x="${x(i)}" y="${Tp + chartH + 16}" text-anchor="middle" font-size="11" fill="${C.text}">${lbl}</text>`;
+        g += `<text x="${x(i)}" y="${Tp + chartH + 16}" text-anchor="${i === 0 ? "start" : "middle"}" font-size="11" fill="${C.text}">${lbl}</text>`;
       }
     });
     if (T.bud && T.bud.budgetOcc) {
@@ -4129,16 +4133,16 @@ const AM_CHARTS = (() => {
     g += `<g class="am-hover" style="display:none"><line class="am-guide" x1="0" x2="0" y1="${Tp}" y2="${barTop + barH}" stroke="${C.occ}" stroke-opacity="0.35" stroke-width="1"/>`
        + shown.map(k => `<circle class="am-hdot" data-k="${k}" r="4.5" cx="0" cy="0" fill="#fff" stroke="${SERIES[k].color}" stroke-width="2.25"/>`).join("") + `</g>`;
     g += `<rect class="am-hit" x="${L - 6}" y="${Tp}" width="${W - L - Rt + 12}" height="${barTop + barH - Tp}" fill="transparent"/>`;
-    const svg = `<svg class="am-chart am-chart-live" viewBox="0 0 ${W} ${barTop + barH + 4}" preserveAspectRatio="xMidYMid meet" tabindex="0"
+    const svg = `<svg class="am-chart am-chart-live" width="${W}" height="${barTop + barH + 4}" viewBox="0 0 ${W} ${barTop + barH + 4}" preserveAspectRatio="xMidYMid meet" tabindex="0"
       role="img" aria-label="Leasing over the last ${n} weeks. Hover or use the arrow keys to see any week.">${g}</svg>`;
     return { svg, n, start: s, x, y, L, Rt, W };
   }
 
   /* Price ladder: current rent vs size, stem to the decided (or proposed) rate */
-  function ladder(T, key, H = 300) {
+  function ladder(T, key, H = 300, width = 560) {
     const rows = T.rows.filter(r => r.sqft && r.rent);
     if (!rows.length) return "";
-    const W = 560, L = 58, Rt = 18, Tp = 16, B = 40;
+    const W = Math.max(320, Math.round(width)), L = 58, Rt = 18, Tp = 16, B = 40;
     const dec = r => { const d = AM_DECISIONS.get(key, r); return d.status === "held" ? r.rent : d.rent; };
     const sq = rows.map(r => r.sqft), rents = rows.flatMap(r => [r.rent, dec(r)]);
     const x0 = Math.min(...sq) * 0.95, x1 = Math.max(...sq) * 1.03, y0 = Math.min(...rents) * 0.96, y1 = Math.max(...rents) * 1.03;
@@ -4176,7 +4180,7 @@ const AM_CHARTS = (() => {
     const tiers = [...new Set(rows.map(r => r.tier))];
     const legend = tiers.map(t => `<span class="am-legend-item"><span class="am-dot" style="background:${tierColor[t] || C.occ}"></span>${AMT.esc(AMT.tierLabel(t))}</span>`).join("")
       + `<span class="am-legend-item"><span class="am-dot am-dot-hollow"></span>New rate</span>`;
-    return `<div class="am-legend">${legend}</div><svg class="am-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rent by unit size">${g}</svg>`;
+    return `<div class="am-legend">${legend}</div><svg class="am-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rent by unit size">${g}</svg>`;
   }
 
   function spark(values, w = 120, h = 28) {
@@ -4219,6 +4223,14 @@ const AM_TRACKER_UI = (() => {
 
   /* ---------- This Week: interactive status & trend ---------- */
   const view = { weeks: 26, series: { leased: true, occ: true, trend: false, exp: false } };
+  let chartKey = null, chartW = 0, chartTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(chartTimer);
+    chartTimer = setTimeout(() => {
+      const host = $("amStatusChart");
+      if (chartKey && host && host.offsetParent !== null && Math.abs(host.clientWidth - chartW) > 2) { chartW = host.clientWidth; drawChart(chartKey); }
+    }, 120);
+  });
   const TILE_SERIES = { leased: "Leased", occ: "Occupied", trend: "Trend", exp: "Exposed" };
 
   function weekValues(T, idx) {
@@ -4277,8 +4289,10 @@ const AM_TRACKER_UI = (() => {
   function drawChart(key) {
     const T = get(key), host = $("amStatusChart"); if (!T || !host) return;
     drawLegend(T);
-    const c = AM_CHARTS.trend(T, { weeks: view.weeks, series: view.series });
+    const c = AM_CHARTS.trend(T, { weeks: view.weeks, series: view.series, width: host.clientWidth || 860 });
+    chartKey = key;
     host.innerHTML = c.svg;
+    chartW = host.clientWidth;
     const svg = host.querySelector("svg"), hover = svg.querySelector(".am-hover"), guide = svg.querySelector(".am-guide");
     const latest = T.trend.dates.length - 1;
     let cur = null;
@@ -4309,7 +4323,7 @@ const AM_TRACKER_UI = (() => {
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); show((cur ?? c.n - 1) + (e.key === "ArrowLeft" ? -1 : 1)); }
       if (e.key === "Escape") clear();
     });
-    svg.addEventListener("focus", () => { if (cur === null) show(c.n - 1); });
+    svg.addEventListener("focus", () => { if (cur === null && svg.matches(":focus-visible")) show(c.n - 1); });
     svg.addEventListener("blur", clear);
     paintTiles(T, latest);
   }
@@ -4490,14 +4504,15 @@ const AM_TRACKER_UI = (() => {
      so the pair ends level with no empty space under the chart. */
   function renderLadder(key) {
     const T = get(key), el = $("priceLadderBody"); if (!el || !T) return;
-    const draw = H => { el.innerHTML = AM_CHARTS.ladder(T, key, H) + `<div class="am-footnote"><p>Dots are today's rent. A hollow dot on a dashed stem is the decided rate, or the model's proposal while pending.</p></div>`; };
+    const width = el.clientWidth || 560;
+    const draw = H => { el.innerHTML = AM_CHARTS.ladder(T, key, H, width) + `<div class="am-footnote"><p>Dots are today's rent. A hollow dot on a dashed stem is the decided rate, or the model's proposal while pending.</p></div>`; };
     draw(300);
     const card = $("priceLadderCard"), peer = $("askingHistoryCard"), svg = el.querySelector("svg");
     if (card && peer && svg && window.matchMedia("(min-width: 901px)").matches) {
       peer.style.minHeight = ""; card.style.flexGrow = "0";
       const spare = peer.offsetHeight - card.offsetHeight;
       card.style.flexGrow = "";
-      if (spare > 8) draw(Math.round(300 + spare * 560 / svg.getBoundingClientRect().width));
+      if (spare > 8) draw(Math.round(300 + spare));               // 1 unit = 1 px now
     }
     badge("priceLadderBadge", AMT.BADGE);
   }

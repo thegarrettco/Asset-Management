@@ -1771,6 +1771,47 @@ hr.home-divider {
 /* The ladder's chips follow the card header directly: the standard header
    gap above (the header supplies it), and clear space before the chart */
 .am-legend.am-ladder-legend { margin: 0 0 0.75rem; }
+
+/* =========================================================
+   AM: Phones (≤900px). Desktop and tablet-landscape untouched.
+   ========================================================= */
+.am-mfilters { display: none; }
+@media (max-width: 900px) {
+  /* native page scrolling: tables at full height, no inner vertical scroll */
+  .am-freeze-card { max-height: none !important; overflow: visible !important; }
+  .am-freeze-wrap { overflow-y: visible !important; flex: none !important; }
+  .excel-card > [id$="Body"], .excel-card > .am-card-body { min-height: auto; }
+  .am-subnav { -webkit-backdrop-filter: none; backdrop-filter: none; background: #fff; }
+
+  /* the subtitle keeps its spacing as padding, so wrapped lines sit close */
+  .project-header h3 { line-height: 1.3 !important; padding: 0.6em 0; }
+
+  /* filters: compact row instead of chips */
+  .am-filters { display: block; padding-bottom: 1rem; margin-bottom: 1rem; }
+  .am-filters > .am-filter, .am-filters > .am-filter-count { display: none; }
+  .am-mfilters { display: block; }
+  .am-mf-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.5rem; align-items: center; }
+  .am-mf-toggle {
+    font: inherit; font-size: 0.85rem; font-weight: 600; color: var(--secondary); background: #f1f4f7; border: 0; border-radius: 8px;
+    padding: 0.55rem 0.8rem; display: inline-flex; align-items: center; gap: 0.45rem; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .am-mf-toggle.open { background: var(--secondary); color: #fff; }
+  .am-mf-count { min-width: 1.15rem; height: 1.15rem; padding: 0 0.3rem; border-radius: 999px; background: var(--primary); color: #fff;
+                 font-size: 0.7rem; display: inline-flex; align-items: center; justify-content: center; }
+  .am-mf-caret { width: 0.45rem; height: 0.45rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+                 transform: rotate(45deg) translateY(-2px); transition: transform 0.15s ease; }
+  .am-mf-toggle.open .am-mf-caret { transform: rotate(-135deg) translateY(-1px); }
+  .am-mf-sort { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; font-size: 0.85rem; padding: 0.5rem 0.55rem; min-height: 2.35rem; text-overflow: ellipsis; }
+  .am-mf-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem 0.75rem; margin-top: 0.75rem; }
+  .am-mf-panel[hidden] { display: none; }
+  .am-mf-field { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .am-mf-field span { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--am-muted); }
+  .am-mf-field select { font: inherit; font-size: 0.85rem; padding: 0.45rem 0.5rem; border-radius: 8px; border: 1px solid var(--am-line);
+                        background: #fff; color: var(--secondary); min-width: 0; width: 100%; }
+  .am-mf-clear { grid-column: 1 / -1; justify-self: start; font: inherit; font-size: 0.8rem; font-weight: 600; color: var(--primary);
+                 background: none; border: 0; padding: 0.2rem 0; cursor: pointer; }
+  .am-mf-count-line { margin-top: 0.6rem; font-size: 0.75rem; color: var(--am-muted); }
+}
 </style>
 </head>
 
@@ -4782,6 +4823,31 @@ const AM_COVER_UI = (() => {
   }
   const keyOf = name => ({ Book: "book", Status: "status", Regional: "rm", Management: "mgmt" }[name]);
 
+  /* Phones: one compact row (Filters + Sort) instead of the chip rows; the
+     four filters open as native dropdowns in a small panel. */
+  let mPanelOpen = false;
+  function mobileFilters(ks, rms) {
+    const active = ["book", "status", "rm", "mgmt"].filter(k => F[k] !== "all").length;
+    const sel = (key, label, opts) => `<label class="am-mf-field"><span>${label}</span><select data-mf="${key}">${opts.map(([v, l]) =>
+      `<option value="${esc(v)}"${F[key] === v ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
+    return `<div class="am-mfilters">
+      <div class="am-mf-row">
+        <button type="button" class="am-mf-toggle${mPanelOpen ? " open" : ""}" aria-expanded="${mPanelOpen}" data-mf-toggle>
+          Filters${active ? `<span class="am-mf-count">${active}</span>` : ""}<span class="am-mf-caret" aria-hidden="true"></span></button>
+        <select class="am-sort am-mf-sort" aria-label="Sort properties">${[["attention", "Needs attention first"], ["move", "Biggest move"], ["exposure", "Exposure"], ["leased", "Leased %"], ["signed", "Signings"], ["delq", "Delinquency"], ["az", "A–Z"]]
+            .map(([v, l]) => `<option value="${v}" ${F.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      </div>
+      <div class="am-mf-panel"${mPanelOpen ? "" : " hidden"}>
+        ${sel("book", "Book", [["all", "All"], ["stab", "Stabilized"], ["lu", "Lease-up"]])}
+        ${sel("status", "Status", [["all", "All"], ["att", "Needs attention"], ["wat", "Watch"], ["ok", "On track"], ["pre", "Pre-lease"]])}
+        ${sel("rm", "Regional", [["all", "All"]].concat(rms.map(r => [r, r])))}
+        ${sel("mgmt", "Management", [["all", "All"], ["Garrett Residential", "Garrett"], ["Pegasus Residential", "Pegasus"]])}
+        ${active ? `<button type="button" class="am-mf-clear" data-mf-clear>Clear filters</button>` : ""}
+      </div>
+      <div class="am-mf-count-line">Showing ${filteredKeys().length} of ${allKeys().length} properties</div>
+    </div>`;
+  }
+
   function filters() {
     const ks = allKeys().map(get).filter(Boolean);
     const count = f => ks.filter(f).length;
@@ -4794,11 +4860,19 @@ const AM_COVER_UI = (() => {
       + `<div class="am-filter"><span class="am-filter-label">Sort</span><select class="am-sort" aria-label="Sort properties">
           ${[["attention", "Needs attention first"], ["move", "Biggest move"], ["exposure", "Exposure"], ["leased", "Leased %"], ["signed", "Signings"], ["delq", "Delinquency"], ["az", "A–Z"]]
             .map(([v, l]) => `<option value="${v}" ${F.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-        <div class="am-filter-count">Showing ${filteredKeys().length} of ${allKeys().length} properties</div>`;
+        <div class="am-filter-count">Showing ${filteredKeys().length} of ${allKeys().length} properties</div>`
+      + mobileFilters(ks, rms);
     if (!el.__wired) {
       el.__wired = true;
       el.addEventListener("click", e => { const b = e.target.closest("[data-f]"); if (!b) return; F[b.dataset.f] = b.dataset.v; refresh(); });
-      el.addEventListener("change", e => { if (e.target.matches(".am-sort")) { F.sort = e.target.value; refresh(); } });
+      el.addEventListener("change", e => {
+        if (e.target.matches(".am-sort")) { F.sort = e.target.value; refresh(); }
+        if (e.target.matches("[data-mf]")) { F[e.target.dataset.mf] = e.target.value; refresh(); }
+      });
+      el.addEventListener("click", e => {
+        if (e.target.closest("[data-mf-toggle]")) { mPanelOpen = !mPanelOpen; filters(); }
+        if (e.target.closest("[data-mf-clear]")) { F.book = F.status = F.rm = F.mgmt = "all"; refresh(); }
+      });
     }
   }
 
@@ -7264,12 +7338,18 @@ egInitAuth();
     { cardId: "reviewsCard", boxId: "reviewsTableWrap" }
   ];
 
+  /* Phones (≤900px) scroll natively: tables show at full height and the router
+     stays out of the way. Taking over touch scrolling there felt jumpy and
+     left areas unpainted on mobile Safari. Desktop is unchanged. */
+  const isPhone = () => window.matchMedia("(max-width: 900px)").matches;
+
   /* Grid items default to min-height:auto, which beats max-height; pin it inline */
   function clampCards() {
     const pad = stickyTop() * 2;
     SCROLL_CARDS.forEach(t => {
       const el = document.getElementById(t.cardId);
       if (!el) return;
+      if (isPhone()) { el.style.maxHeight = ""; el.style.overflow = ""; el.style.minHeight = ""; return; }
       el.style.minHeight = "0";
       el.style.boxSizing = "border-box";
       el.style.overflow = "hidden";
@@ -7352,7 +7432,7 @@ egInitAuth();
   document.addEventListener("touchstart", e => {
     stopGlide();
     tracking = false; axis = null; tc = null;
-    if (e.touches.length !== 1) return;
+    if (e.touches.length !== 1 || isPhone()) return;
     tc = ctx();
     if (!tc) return;
     startX = e.touches[0].clientX;

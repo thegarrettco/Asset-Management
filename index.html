@@ -1732,6 +1732,26 @@ hr.home-divider {
 .am-netbar { transition: opacity 0.12s ease; }
 .am-netbar.is-dim { opacity: 0.35; }
 
+
+/* This Week on wide screens: chart on the left, the six tiles as a 2×3
+   panel on the right; the chart is sized to end level with the tiles. */
+@media (min-width: 1280px) {
+  #amStatusBody {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 28%, 440px);
+    grid-template-areas: "head head" "bar tiles" "chart tiles" "foot foot";
+    grid-template-rows: auto auto 1fr auto;
+    column-gap: 1.75rem;
+  }
+  #amStatusBody > .am-status-head { grid-area: head; }
+  #amStatusBody > .am-chart-bar   { grid-area: bar; margin: 0 0 0.5rem; }
+  #amStatusBody > .am-chart-wrap  { grid-area: chart; align-self: end; }
+  #amStatusBody > .am-tiles       { grid-area: tiles; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
+  #amStatusBody > .am-footnote    { grid-area: foot; }
+  /* in the side panel the weekly and 4-week changes each get their own line */
+  #amStatusBody .am-tile-delta .am-d { display: block; }
+  #amStatusBody .am-tile-delta .am-dsep { display: none; }
+}
 </style>
 </head>
 
@@ -4077,7 +4097,10 @@ const AM_CHARTS = (() => {
     /* Drawn at the card's real width (1 unit = 1 px), so labels stay 11px at
        any screen size; only the plot widens. Height grows gently with width. */
     const W = Math.max(480, Math.round(opts.width || 860));
-    const chartH = Math.round(Math.min(250, Math.max(190, W * 0.17)));
+    /* opts.height (side-by-side layout) sets the whole chart's height so its
+       bottom meets the tile panel's; otherwise height grows gently with width */
+    const chartH = opts.height ? Math.max(160, Math.round(opts.height - 92))
+                               : Math.round(Math.min(250, Math.max(190, W * 0.17)));
     const dates = t.dates.slice(s), L = 44, Rt = 16, Tp = 14, barTop = Tp + chartH + 26, barH = 48;
     const x = i => L + (i * (W - L - Rt)) / Math.max(1, n - 1);
     const shown = Object.keys(SERIES).filter(k => on[k]);
@@ -4261,7 +4284,7 @@ const AM_TRACKER_UI = (() => {
       tile.querySelector(".am-tile-value").textContent = pct1(m.now);
       const dl = tile.querySelector(".am-tile-delta");
       dl.className = `am-tile-delta ${dir}`;
-      dl.innerHTML = `${m.w1 === null ? "—" : pts(m.w1)} <span>wk</span> · ${m.w4 === null ? "—" : pts(m.w4)} <span>4 wk</span>`;
+      dl.innerHTML = `<span class="am-d">${m.w1 === null ? "—" : pts(m.w1)} <span>wk</span></span><span class="am-dsep"> · </span><span class="am-d">${m.w4 === null ? "—" : pts(m.w4)} <span>4 wk</span></span>`;
     });
     const sTile = el.querySelector('.am-tile[data-kpi="signed"]');
     if (sTile) {
@@ -4289,7 +4312,16 @@ const AM_TRACKER_UI = (() => {
   function drawChart(key) {
     const T = get(key), host = $("amStatusChart"); if (!T || !host) return;
     drawLegend(T);
-    const c = AM_CHARTS.trend(T, { weeks: view.weeks, series: view.series, width: host.clientWidth || 860 });
+    /* Wide screens: chart left, tiles right (CSS). Size the chart to end level
+       with the last row of tiles. */
+    paintTiles(T, T.trend.dates.length - 1);          // final tile heights first, then measure
+    let height = null;
+    const body = $("amStatusBody");
+    if (window.matchMedia("(min-width: 1280px)").matches && body) {
+      const tiles = body.querySelector(".am-tiles"), bar = body.querySelector(".am-chart-bar");
+      if (tiles && bar) height = tiles.offsetHeight - (bar.offsetHeight + parseFloat(getComputedStyle(bar).marginBottom || 0));
+    }
+    const c = AM_CHARTS.trend(T, { weeks: view.weeks, series: view.series, width: host.clientWidth || 860, height });
     chartKey = key;
     host.innerHTML = c.svg;
     chartW = host.clientWidth;

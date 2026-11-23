@@ -8954,5 +8954,329 @@ const AM_LEADS = (() => {
 </script>
 <!-- ===== END LEAD SUMMARY PAGE ===== -->
 
+<!-- ===== SCROLL REVEAL MOTION: cards, tables, charts and tiles animate in the first time they scroll into view ===== -->
+<style>
+/* Cards wait, invisible, until they first scroll into view (set only by the
+   script below, and never when reduced motion is on) */
+[data-amr-wait] { opacity: 0 !important; }
+@media print { [data-amr-wait] { opacity: 1 !important; } }
+</style>
+<script>
+/* ============================================================
+   SCROLL REVEAL MOTION
+   Each card plays once, the first time it is seen on a page:
+   - the card rises and fades in (cards seen together stagger)
+   - table rows cascade in from the top
+   - chart bars grow from their baseline, lines draw left to right,
+     points pop in, and labels and reference lines fade in
+   - tiles and summary figures stagger in and count up to their value
+   Changing property, report or page plays it again for the new view.
+   Content that arrives after its card has played (live data) animates
+   when it lands; later redraws (hover, sort, filters, resize) do not.
+   Nothing plays behind the sign-in or loading screens.
+   ============================================================ */
+(function () {
+  "use strict";
+  if (!("IntersectionObserver" in window) || !("MutationObserver" in window)) return;
+  if (!Element.prototype.animate) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const CARD_SEL = ".excel-card, .property-details, .rendering-section, .map-section, .project-header, .ps-project-header";
+  const PAGES = ["projectContent", "assetDirectoryContent", "leadSummaryContent"];
+  const BLOCKERS = ["egLoadingOverlay", "egAuthSpinnerOverlay", "egAuthOverlay", "projectLoadingOverlay"];
+  const EASE = "cubic-bezier(.16,.84,.3,1)";
+  const state = new WeakMap();          // card -> { wait, seen, rows, chart, tiles }
+  let known = [];
+  let viewKey = null;
+
+  const $ = id => document.getElementById(id);
+  const shown = el => !!el && getComputedStyle(el).display !== "none";
+  const play = (el, frames, opts) => {
+    try { return el.animate(frames, Object.assign({ easing: EASE, fill: "backwards" }, opts)); } catch (e) { return null; }
+  };
+
+  /* ---------- nothing plays while a sign-in or loading screen covers the page ---------- */
+  function blocked() {
+    return BLOCKERS.some(id => {
+      const el = $(id);
+      if (!el || !shown(el)) return false;
+      if (el.style.opacity === "0" || el.classList.contains("eg-fade-out") || el.classList.contains("eg-auth-hidden")) return false;
+      return true;
+    });
+  }
+
+  /* ---------- which page is on screen (a change replays the motion) ---------- */
+  function currentView() {
+    const ls = $("leadSummaryContent"), dir = $("assetDirectoryContent"), pc = $("projectContent");
+    if (shown(ls)) return "ls";
+    if (shown(dir)) return "dir";
+    const h = pc && pc.querySelector(".project-header h2");
+    return "am:" + (h ? h.textContent : "");
+  }
+  function activePage() {
+    return PAGES.map($).find(el => el && shown(el)) || null;
+  }
+
+  /* ---------- table rows cascade in ---------- */
+  const done = new WeakMap();          // rows, charts, tiles and figures that have already played in this view
+  let epoch = 0;
+  const fresh = el => done.get(el) !== epoch && (done.set(el, epoch), true);
+  function playRows(card, base) {
+    const all = [...card.querySelectorAll("tr")].filter(r => !r.closest("thead"));
+    if (!all.some(r => r.cells.length > 1)) return false;        // nothing but a placeholder yet
+    const rows = all.filter(fresh);
+    rows.slice(0, 40).forEach((r, i) => {
+      play(r, [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }],
+        { duration: 480, delay: base + Math.min(i, 16) * 32 });
+    });
+    const heads = [...card.querySelectorAll("thead tr")].filter(fresh);
+    heads.forEach(h => play(h, [{ opacity: 0 }, { opacity: 1 }], { duration: 400, delay: base }));
+    return true;
+  }
+
+  /* ---------- charts ---------- */
+  function hasStroke(el) {
+    const s = el.getAttribute("stroke");
+    return s && s !== "none" && s !== "transparent";
+  }
+  function isHidden(el) {
+    return !!el.closest(".am-hover") || el.getAttribute("fill") === "transparent";
+  }
+  function setBox(el, origin) {
+    const prev = [el.style.transformBox, el.style.transformOrigin];
+    el.style.transformBox = "fill-box"; el.style.transformOrigin = origin;
+    return () => { el.style.transformBox = prev[0]; el.style.transformOrigin = prev[1]; };
+  }
+  function playSvg(svg, base) {
+    /* Lead Summary charts: set their own render-time motion aside so the
+       entrance matches every other page */
+    svg.classList.remove("ls-anim");
+
+    /* horizontal bars (Lead Summary rankings) grow from the left, top to bottom */
+    const hbars = [...svg.querySelectorAll("rect.ls-gx")].filter(r => !isHidden(r) && +r.getAttribute("width") > 0);
+    const hStep = Math.min(45, 700 / Math.max(1, hbars.length));
+    hbars.slice().sort((a, b) => (+a.getAttribute("y")) - (+b.getAttribute("y"))).forEach((r, i) => {
+      const restore = setBox(r, "0% 50%");
+      const a = play(r, [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }], { duration: 750, delay: base + i * hStep });
+      if (a) { a.onfinish = restore; a.oncancel = restore; } else restore();
+    });
+
+    /* bars grow from the zero line: up for gains, down for losses */
+    const bars = [...svg.querySelectorAll("rect")].filter(r => !r.classList.contains("ls-gx") && !isHidden(r) && +r.getAttribute("height") > 0 && r.getAttribute("fill"));
+    if (bars.length) {
+      const tally = new Map();
+      bars.forEach(r => {
+        const y = +r.getAttribute("y"), h = +r.getAttribute("height");
+        [Math.round(y), Math.round(y + h)].forEach(k => tally.set(k, (tally.get(k) || 0) + 1));
+      });
+      const zero = [...tally.entries()].sort((a, b) => (b[1] - a[1]) || (b[0] - a[0]))[0][0];
+      const sorted = bars.slice().sort((a, b) => (+a.getAttribute("x")) - (+b.getAttribute("x")));
+      const step = Math.min(38, 700 / sorted.length);
+      sorted.forEach((r, i) => {
+        const top = Math.abs(Math.round(+r.getAttribute("y")) - zero) <= 1;
+        const restore = setBox(r, top ? "50% 0%" : "50% 100%");
+        const a = play(r, [{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }], { duration: 700, delay: base + i * step });
+        if (a) { a.onfinish = restore; a.oncancel = restore; } else restore();
+      });
+    }
+
+    /* data lines draw from left to right; dashed reference lines fade in */
+    const lines = [...svg.querySelectorAll("polyline, path")].filter(l => !isHidden(l) && hasStroke(l));
+    lines.forEach((l, i) => {
+      const dashed = l.getAttribute("stroke-dasharray") || l.style.strokeDasharray;
+      let len = +l.getAttribute("pathLength") || 0;
+      if (!len) { try { len = l.getTotalLength(); } catch (e) {} }
+      if (dashed || !len) { play(l, [{ opacity: 0 }, { opacity: 1 }], { duration: 600, delay: base + 250 }); return; }
+      play(l, [
+        { strokeDasharray: `${len} ${len}`, strokeDashoffset: len },
+        { strokeDasharray: `${len} ${len}`, strokeDashoffset: 0 }
+      ], { duration: 1100, delay: base + 100 + i * 120, easing: "cubic-bezier(.3,.6,.2,1)" });
+    });
+    svg.querySelectorAll("line[stroke-dasharray]").forEach(l => {
+      if (!isHidden(l)) play(l, [{ opacity: 0 }, { opacity: 1 }], { duration: 600, delay: base + 300 });
+    });
+
+    /* points pop in once the lines are drawing */
+    const dots = [...svg.querySelectorAll("circle")].filter(c => !isHidden(c));
+    const dStep = Math.min(45, 600 / Math.max(1, dots.length));
+    dots.forEach((c, i) => {
+      const restore = setBox(c, "50% 50%");
+      const a = play(c, [{ opacity: 0, transform: "scale(0)" }, { opacity: 1, transform: "scale(1)" }],
+        { duration: 450, delay: base + 350 + i * dStep, easing: "cubic-bezier(.34,1.56,.64,1)" });
+      if (a) { a.onfinish = restore; a.oncancel = restore; } else restore();
+    });
+
+    /* labels settle in last */
+    svg.querySelectorAll("text").forEach(t => {
+      if (!isHidden(t)) play(t, [{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: base + 450 });
+    });
+  }
+  function playCharts(card, base) {
+    const svgs = [...card.querySelectorAll("svg.am-chart, svg.am-spark")];
+    if (!svgs.length) return false;
+    svgs.filter(fresh).forEach(s => playSvg(s, base));
+    return true;
+  }
+
+  /* ---------- tiles and summary figures stagger in and count up ---------- */
+  function parseCount(text) {
+    const m = String(text).match(/^([\s$+\-\u2212(]*)([0-9][0-9,]*(?:\.[0-9]+)?)(\s*(?:%|x|K|M|B|bps|pts)?\)?)$/i);
+    if (!m) return null;
+    if (!m[1] && !m[3] && /^(19|20)\d\d$/.test(m[2])) return null;     // a year, not a figure
+    const raw = m[2], dec = (raw.split(".")[1] || "").length;
+    return { pre: m[1], suf: m[3], to: parseFloat(raw.replace(/,/g, "")), dec, sep: raw.includes(",") };
+  }
+  function countUp(el, delay) {
+    if (el.children.length) return;
+    const final = el.textContent, c = parseCount(final.trim());
+    if (!c || !isFinite(c.to) || c.to === 0) return;
+    const MINUS = String.fromCharCode(8722);
+    const pre0 = [...c.pre].filter(ch => ch !== "+" && ch !== "-" && ch !== MINUS).join("");
+    const fmt = n => (n ? c.pre : pre0) + (c.sep
+      ? n.toLocaleString("en-US", { minimumFractionDigits: c.dec, maximumFractionDigits: c.dec })
+      : n.toFixed(c.dec)) + c.suf;
+    /* sit at zero until the tile has faded in, then count up */
+    let last = fmt(0);
+    el.textContent = last;
+    setTimeout(() => {
+      if (el.textContent !== last) return;            // the page changed it (or its own count is running)
+      const t0 = performance.now(), dur = 1100;
+      const step = now => {
+        if (el.textContent !== last) return;          // redrawn mid-count: stop
+        const t = Math.max(0, Math.min(1, (now - t0) / dur)), e = 1 - Math.pow(2, -10 * t);
+        last = t < 1 ? fmt(c.to * e) : final;
+        el.textContent = last;
+        if (t < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }, delay);
+  }
+  function playTiles(card, base) {
+    const groups = card.querySelectorAll(".am-tiles, .am-strip, .am-kpis, .am-books, .am-movers");
+    let any = false;
+    groups.forEach(g => {
+      [...g.children].forEach((ch, i) => {
+        any = true;
+        if (!fresh(ch)) return;
+        play(ch, [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
+          { duration: 560, delay: base + Math.min(i, 10) * 70 });
+      });
+    });
+    card.querySelectorAll(".am-tile-value, .am-strip > * > strong, .am-tile-value > .ls-n").forEach((v, i) => { if (fresh(v)) countUp(v, base + 120 + Math.min(i, 10) * 70); });
+    return any;
+  }
+
+  /* ---------- a card's inner pieces, each once per view ---------- */
+  function playInner(card, base, redraw) {
+    const s = state.get(card); if (!s) return;
+    if ((redraw || !s.rows) && playRows(card, base)) s.rows = true;
+    if ((redraw || !s.chart) && playCharts(card, base)) s.chart = true;
+    if ((redraw || !s.tiles) && playTiles(card, base)) s.tiles = true;
+  }
+  /* A card redrawn while its entrance is still playing (Lead Summary redraws
+     its charts at their final width just after opening) carries on with the
+     entrance instead of snapping to the finished state */
+  const GRACE = 1500;
+
+  /* ---------- reveal ---------- */
+  function reveal(card, delay) {
+    const s = state.get(card); if (!s || !s.wait) return;
+    s.wait = false;
+    play(card, [{ opacity: 0, transform: "translateY(22px)" }, { opacity: 1, transform: "none" }],
+      { duration: 750, delay });
+    card.removeAttribute("data-amr-wait");
+    s.revealAt = performance.now(); s.innerBase = delay + 180;
+    playInner(card, delay + 180);
+  }
+  let pump = null;
+  function flush() {
+    pump = null;
+    if (blocked()) { pump = setTimeout(flush, 120); return; }
+    const ready = known.filter(c => { const s = state.get(c); return s && s.wait && s.seen && c.isConnected && shown(c); });
+    ready.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return (ra.top - rb.top) || (ra.left - rb.left);
+    });
+    ready.forEach((c, i) => reveal(c, Math.min(i, 5) * 90));
+  }
+  const schedule = () => { if (!pump) pump = setTimeout(flush, 0); };
+
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { const s = state.get(e.target); if (s) s.seen = e.isIntersecting; });
+    schedule();
+  }, { threshold: 0, rootMargin: "0px 0px -8% 0px" });
+
+  function arm(card) {
+    state.set(card, { wait: true, seen: false, rows: false, chart: false, tiles: false });
+    card.setAttribute("data-amr-wait", "");
+    io.unobserve(card); io.observe(card);
+  }
+
+  /* ---------- find cards (top level only; nested cards move with their parent) ---------- */
+  const watchedPages = new WeakSet();
+  function scan() {
+    PAGES.forEach(id => {
+      const pg = $(id);
+      if (pg && !watchedPages.has(pg)) { watchedPages.add(pg); mo.observe(pg, { attributes: true, attributeFilter: ["style", "class", "hidden"] }); }
+    });
+    const all = [...document.querySelectorAll(CARD_SEL)].filter(c => {
+      const p = c.parentElement && c.parentElement.closest(CARD_SEL);
+      return !p && PAGES.some(id => { const pg = $(id); return pg && pg.contains(c); });
+    });
+    all.forEach(c => { if (!state.has(c)) arm(c); });
+    known = all;
+  }
+
+  /* ---------- a new view replays every card on that page ---------- */
+  function checkView() {
+    const v = currentView();
+    if (v === viewKey) return;
+    viewKey = v;
+    epoch++;
+    const page = activePage();
+    known.forEach(c => { if (page && page.contains(c)) arm(c); });
+  }
+
+  /* ---------- content landing after its card has played animates as it arrives ---------- */
+  let dirty = new Set(), frame = null;
+  function onFrame() {
+    frame = null;
+    scan();
+    checkView();
+    const cards = dirty; dirty = new Set();
+    cards.forEach(card => {
+      const s = state.get(card);
+      if (!s || s.wait) return;
+      const since = performance.now() - (s.revealAt || 0);
+      if (since < GRACE) { playInner(card, Math.max(0, s.innerBase - since), true); return; }
+      if (s.rows && s.chart && s.tiles) return;
+      playInner(card, 0);
+    });
+  }
+  const mo = new MutationObserver(records => {
+    for (const r of records) {
+      if (r.addedNodes.length) {
+        const t = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+        const card = t && t.closest && t.closest(CARD_SEL);
+        if (card) {
+          let top = card, p;
+          while ((p = top.parentElement && top.parentElement.closest(CARD_SEL))) top = p;
+          dirty.add(top);
+        }
+      }
+    }
+    if (!frame) frame = requestAnimationFrame(onFrame);
+  });
+
+  function start() {
+    mo.observe(document.body, { childList: true, subtree: true });
+    scan();
+    viewKey = currentView();
+    schedule();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
+})();
+</script>
+
 </body>
 </html>

@@ -9862,7 +9862,7 @@ const AM_XP = (() => {
     if (!scope || REDUCED()) return;
     scope.querySelectorAll("[data-v]").forEach(el => {
       const was = before.get(el.dataset.v);
-      if (was !== undefined && was !== el.textContent) { el.classList.remove("rf-flash"); void el.offsetWidth; el.classList.add("rf-flash"); }
+      if (was !== undefined && was.toLowerCase() !== el.textContent.toLowerCase()) { el.classList.remove("rf-flash"); void el.offsetWidth; el.classList.add("rf-flash"); }
     });
   }
 
@@ -11460,6 +11460,104 @@ const AM_REFI = (() => {
 })();
 </script>
 <!-- ===== END TABLE SORTING ===== -->
+
+<!-- ===== TITLE CASE: labels, headings, buttons and chips read in title case ===== -->
+<script>
+/* ============================================================
+   TITLE CASE
+   Everything that is a label rather than a sentence reads in title
+   case on every page: card and table headers, row labels, field
+   labels, buttons, chips, legends, filters, tile labels and their
+   sub-lines, dropdown options and chart labels. Small words stay
+   lowercase inside a label (a, an, the, and, or, of, to, as, at,
+   by, in, on, per, for…), and units stay as written (sf, wk, mo,
+   pts, x, vs). Sentences are left alone: footnotes, explanations,
+   hover readouts, notes, reviews, specials and empty-state lines.
+   Runs on whatever the page draws, now or later, so new content
+   follows the same rule.
+   ============================================================ */
+(function () {
+  "use strict";
+  const LABELS = [
+    "th", "td", "h1", "h2", "h3", "h4", "h5", "label", "button", "option", ".eg-custom-menu-option",
+    ".excel-row-label", ".excel-card-badge", ".gallery-badge", ".am-chip", ".am-tag", ".am-act", ".xp-flag",
+    ".am-legend-item", ".am-tierchip", ".am-tierall", ".am-fchip", ".am-filter-label", ".am-filter-count",
+    ".am-tile-label", ".am-tile-delta", ".am-strip > div > span", ".am-strip em", ".am-kpis span", ".am-kpis em",
+    ".am-week-label", ".am-book-head span", ".am-subnav-link", ".am-subnav-title", ".am-pw-summary", ".am-movers li",
+    ".am-mf-field span", ".am-mf-count-line", ".am-email-meta", ".rf-label", ".rf-was", ".rf-changed", "svg text"
+  ].join(",");
+  /* sentences and free text keep their own case */
+  const SENTENCES = [
+    "p", "script", "style", "textarea", ".am-footnote", ".xp-readout", ".ls-readout", ".rf-answer", ".am-status-why",
+    ".am-pace", ".am-conc", ".am-lede", ".am-notes", ".am-reasons", "#amNotesList", ".am-why-cell", ".am-pw-why",
+    ".xp-special", ".am-wrap", ".am-empty", ".am-book-foot", ".gallery-status", ".am-debug", ".eg-auth-subheading",
+    ".eg-auth-error", ".eg-modal-note", ".eg-modal-subtitle", ".am-email-body", "a[href^='mailto:']"
+  ].join(",");
+  const MINOR = new Set(["a", "an", "the", "and", "but", "or", "nor", "for", "so", "yet", "as", "at", "by", "in", "of", "off", "on", "per", "to", "via"]);
+  const KEEP = new Set(["sf", "wk", "wks", "mo", "mos", "yr", "yrs", "x", "pts", "pt", "bp", "bps", "mi", "k", "vs", "vs."]);
+  const SEP = /[·:—–|(]\s*$/;
+
+  function fixWord(w, fresh) {
+    const m = w.match(/^([^A-Za-z0-9]*)([A-Za-z][\s\S]*)$/);
+    if (!m) return w;                                       // numbers, money, dates, codes
+    const pre = m[1], core = m[2];
+    if (/@|:\/\//.test(core)) return w;                     // emails and links
+    const bare = core.toLowerCase().replace(/[^a-z.'/-]+$/, "").replace(/[.,;:)]+$/, "");
+    if (KEEP.has(bare) || /^v\d/.test(bare)) return w;      // units and version tags (v06)
+    if (!fresh && MINOR.has(bare) && !(bare === "in" && /cash$/i.test(lastWord))) return w;   // "Cash In", like "Cash Out"
+    return pre + core.split("-").map((part, i) => {
+      if (!part || (i > 0 && MINOR.has(part.toLowerCase()))) return part;   // Lead-to-Lease
+      return /^[a-z]/.test(part) ? part.charAt(0).toUpperCase() + part.slice(1) : part;
+    }).join("-");
+  }
+  let lastWord = "";
+  function titleCase(str, fresh) {
+    lastWord = "";
+    return str.replace(/(\S+)|(\s+)/g, (tok, word, ws) => {
+      if (ws) return ws;
+      const out = fixWord(word, fresh);
+      fresh = /[·:—–|]$/.test(word);
+      lastWord = word;
+      return out;
+    }).replace(/\bon Track\b/g, "On Track");                 // the status name, as in "2 On Track"
+  }
+
+  function fixLabel(el) {
+    if (el.closest(SENTENCES)) return;
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let before = "", node;
+    while ((node = walk.nextNode())) {
+      const t = node.data;
+      if (/[a-z]/.test(t) && !(node.parentElement && node.parentElement.closest(SENTENCES))) {
+        const out = titleCase(t, !before.trim() || SEP.test(before));
+        if (out !== t) node.data = out;
+      }
+      before += node.data;
+    }
+  }
+  function fixWithin(root) {
+    if (!root || root.nodeType !== 1) return;
+    const up = root.closest(LABELS); if (up) fixLabel(up);
+    root.querySelectorAll(LABELS).forEach(fixLabel);
+  }
+
+  const mo = new MutationObserver(records => {
+    const seen = new Set();
+    records.forEach(r => {
+      const el = r.type === "characterData" ? r.target.parentElement : r.target;
+      if (el && !seen.has(el)) { seen.add(el); fixWithin(el); }
+    });
+    mo.takeRecords();                                       // our own edits are not new content
+  });
+  function start() {
+    fixWithin(document.body);
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
+  window.AM_TITLE_CASE = titleCase;
+})();
+</script>
+<!-- ===== END TITLE CASE ===== -->
 
 <!-- ===== SCROLL REVEAL MOTION: cards, tables, charts and tiles animate in the first time they scroll into view ===== -->
 <style>
